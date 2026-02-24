@@ -1,169 +1,174 @@
-# Chisinau Commute Upgrade
-## Airport ↔ Botanica Corridor Simulation
+# 🚦 Chișinău Traffic Simulation
 
-A data-science pipeline to simulate, measure, and optimise traffic flow on the
-Airport–Botanica corridor in Chișinău using **SUMO** + **Python** + **TraCI**.
+A high-fidelity traffic simulation of Chișinău, Moldova, built with [SUMO](https://eclipse.dev/sumo/) and visualized with [deck.gl](https://deck.gl). Models 50,000 vehicles/day across all 8 city districts with realistic peak-hour demand, 265 traffic lights, and 45 roundabouts.
 
----
+![Traffic Visualization](data/outputs/fig_congestion_heatmap.png)
 
-## Quick Start
+## Overview
+
+This project builds a full city-scale microsimulation of Chișinău's road network to identify congestion bottlenecks, analyze intersection performance, and visualize traffic flow patterns. The interactive visualization shows individual vehicle movements with headlights, brake lights, and lane-level road congestion in real time.
+
+**Key stats:**
+- 🗺️ Full city OSM network — 265 traffic lights, 45 roundabouts
+- 🚗 50,000 vehicles/day across 8 districts (Centru, Botanica, Buiucani, Râșcani, Ciocana, Sculeni, Telecentru, Durlești)
+- 📊 Calibrated to real Chișinău peak patterns (07:00–09:00 morning peak, 17:00–19:00 evening peak)
+- ✅ 99.8% trip completion rate, mean travel time 9.6 min
+
+## Interactive Visualization
+
+The `data/outputs/chisinau_traffic.html` file is a deck.gl web app showing:
+- Animated vehicle movements with headlights 💡 and brake lights 🔴
+- Lane-level road congestion coloring (severe → free flow)
+- Animated traffic lights 🚦 with realistic phase cycling
+- Live stats: active vehicles, avg speed, congested roads %
+- Top 5 congested intersections and streets with click-to-fly
+
+### Running the visualization
 
 ```bash
-# 1. Install dependencies (Python 3.10+)
-pip install -r requirements.txt
+# Download deck.gl (one-time, ~1.5MB)
+cd data/outputs
+curl -L -o deck.min.js "https://unpkg.com/deck.gl@8.9.35/dist.min.js"
 
-# 2. Make sure SUMO is on your PATH
-#    Download: https://sumo.dlr.de/docs/Downloads.php
-sumo --version
+# Start local server
+python3 -m http.server 8765
 
-# 3. Download OSM corridor data
-python src/network/extract_osm.py --config src/config/scenario.yaml
-
-# 4. Build SUMO network
-python src/network/build_sumo_net.py --config src/config/scenario.yaml
-
-# 5. Generate OD matrix
-python src/demand/od_matrix.py --config src/config/scenario.yaml
-
-# 6. Generate trips (+ duarouter routing)
-python src/demand/trip_generation.py --config src/config/scenario.yaml
-
-# 7. Generate baseline signal plans
-python src/demand/signals.py --config src/config/scenario.yaml
-
-# 8. Run baseline simulation (fixed-time signals)
-python src/simulation/run_sumo.py --config src/config/scenario.yaml
-
-# 9. Extract KPIs and bottlenecks
-python src/simulation/metrics.py --config src/config/scenario.yaml
-
-# 10. Generate baseline report + charts
-python src/analysis/baseline_report.py --config src/config/scenario.yaml
-
-# 11. Run adaptive simulation (TraCI max-pressure controller)
-python src/simulation/run_sumo.py --config src/config/scenario.yaml \
-       --mode traci --controller adaptive_pressure
-
-# 12. Compare baseline vs adaptive
-python src/analysis/compare_runs.py \
-       --baseline data/outputs \
-       --compare  data/outputs/adaptive \
-       --out       data/outputs/comparison
+# Open in browser
+open http://localhost:8765/chisinau_traffic.html
 ```
-
----
 
 ## Project Structure
 
 ```
 chisinau-commute-upgrade/
 ├── data/
-│   ├── osm/                  # Raw OSM export
-│   ├── sumo_net/             # SUMO network files (.net.xml, .poly.xml)
-│   ├── demand/               # OD matrix CSV + trip/route XML
-│   ├── signals/              # Fixed-time signal plans (.add.xml)
-│   └── outputs/              # Simulation outputs + figures
-│
-├── src/
-│   ├── config/
-│   │   └── scenario.yaml     # ← All parameters live here
-│   │
-│   ├── network/
-│   │   ├── extract_osm.py    # Download corridor OSM via Overpass
-│   │   ├── build_sumo_net.py # netconvert + patch list
-│   │   └── clean_network_notes.md  # QA checklist
-│   │
 │   ├── demand/
-│   │   ├── zones.py          # TAZ definitions + edge assignment
-│   │   ├── od_matrix.py      # Gravity model → OD CSV
-│   │   ├── trip_generation.py# OD CSV → SUMO trips + duarouter
-│   │   └── signals.py        # Fixed-time signal XML generator
-│   │
-│   ├── simulation/
-│   │   ├── run_sumo.py       # Batch or TraCI simulation runner
-│   │   ├── metrics.py        # Parse outputs → KPIs + bottlenecks
-│   │   └── controllers/
-│   │       ├── adaptive_pressure.py  # Max-pressure adaptive controller
-│   │       └── fixed_time.py         # No-op pass-through
-│   │
-│   └── analysis/
-│       ├── baseline_report.py   # Reproducible report + figures
-│       ├── compare_runs.py      # Before/after comparison
-│       └── plots.py             # Shared plot utilities
-│
-├── notebooks/
-│   └── corridor_analysis.ipynb  # Interactive exploration
-│
+│   │   ├── od_matrix.csv           # Origin-destination matrix (8 districts)
+│   │   └── trips.trips.xml         # SUMO trip definitions (50,142 trips)
+│   ├── outputs/
+│   │   ├── chisinau_traffic.html   # 🎯 Main interactive visualization
+│   │   ├── congestion_map.html     # Static Folium congestion map
+│   │   ├── roads_congestion.geojson # Lane-level congestion data
+│   │   ├── traffic_lights.json     # TLS node positions
+│   │   ├── trips_deckgl.json       # Vehicle trajectory data
+│   │   ├── edge_congestion.csv     # Per-edge congestion metrics
+│   │   ├── edge_hourly.csv         # Hourly traffic volumes
+│   │   ├── corridor_kpis.yaml      # Simulation KPIs
+│   │   └── fig_*.png               # Analysis charts
+│   └── sumo_net/
+│       ├── realistic_vehicles.add.xml  # Vehicle type definitions
+│       └── corridor.poly.xml           # District polygons
+├── src/
+│   └── config/
+│       └── scenario.yaml           # Simulation configuration
+├── notebooks/                      # Analysis notebooks
 ├── requirements.txt
 └── README.md
 ```
 
----
+## Setup
 
-## Milestones
+### Requirements
 
-| Milestone | Goal | Status |
-|-----------|------|--------|
-| **A1** | Corridor network imported and QA'd | ☐ |
-| **A2** | 5–10 signalised intersections with fixed-time plans | ☐ |
-| **A3** | Synthetic OD demand generated | ☐ |
-| **A4** | Full-day simulation running | ☐ |
-| **B1** | KPIs and bottlenecks extracted | ☐ |
-| **B2** | Baseline report reproducible | ☐ |
-| **C1** | Max-pressure adaptive controller live | ☐ |
-| **C2** | Baseline vs adaptive comparison | ☐ |
+- Python 3.10+
+- SUMO 1.26.0 — [installation guide](https://sumo.dlr.de/docs/Downloads.php)
+- Python packages:
 
----
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Key Configuration
+### Regenerating the SUMO network
 
-All experiment parameters live in **`src/config/scenario.yaml`**:
+The `network.net.xml` file (298MB) is not included in this repo. To regenerate:
 
-- `network.bbox` — bounding box for OSM download
-- `simulation.peak_hours` — morning / midday / evening windows
-- `demand.total_daily_vehicles` — scale OD demand up/down
-- `demand.peak_multipliers` — shape the temporal distribution
-- `signals.pilot_intersections` — cycle lengths and phase lists
-- `signals.adaptive` — min/max green, pressure threshold
+```bash
+# Download Chișinău OSM extract
+# bbox: 28.75-29.00 lon, 46.90-47.08 lat
+# from https://overpass-api.de or https://extract.bbbike.org
 
----
+# Convert OSM to SUMO network
+netconvert --osm-files chisinau.osm \
+  --output-file data/sumo_net/network.net.xml \
+  --geometry.remove --roundabouts.guess \
+  --ramps.guess --junctions.join \
+  --tls.guess-signals --tls.discard-simple \
+  --tls.join --tls.default-type actuated
+```
 
-## KPIs Produced
+### Running the simulation
 
-**Corridor**
-- Mean / median / p90 travel time
-- Total delay (vehicle-hours)
-- Completion rate
+```bash
+cd data/outputs
+sumo -c corridor.sumocfg --duration-log.statistics true
+```
 
-**Network**
-- Per-edge speed heatmap (edge × 15-min bin)
-- Top-10 bottleneck ranking (congested minutes)
-- Mean queue length per approach (via edge density)
+## Methodology
 
----
+### Demand generation
 
-## Validation Sanity Checks
+Trip demand is based on:
+- Moldova vehicle registration data (2023): ~380,000 vehicles in Chișinău
+- Daily active rate: 45% → ~170,000 trips, cross-district subset: 50,000
+- 8 origin-destination zones mapped to OSM district boundaries
+- Temporal distribution calibrated to Eastern European city patterns
 
-Before calibrating against real data, verify:
-- [ ] Free-flow travel time looks reasonable (not < 2 min, not > 2 h)
-- [ ] Morning/evening peaks create visible congestion in heatmap
-- [ ] Bottlenecks occur at intuitively obvious intersections
-- [ ] Increasing `total_daily_vehicles` increases delay **nonlinearly**
+| Period | Share | Multiplier |
+|--------|-------|-----------|
+| Morning peak (07–09) | 28% | 8.0× |
+| Evening peak (17–19) | 24% | 7.0× |
+| Midday (11–14) | 14% | 2.2× |
+| Night (21–07) | 5% | 0.3× |
 
----
+### Congestion analysis
 
-## Known Risks
+Edge congestion scored as:
+```
+score = (1 - mean_speed_ratio) × 0.6 + pct_time_below_50pct × 0.4
+```
 
-| Risk | Mitigation |
-|------|-----------|
-| OSM lane counts wrong | Patch list in `build_sumo_net.py`; `clean_network_notes.md` |
-| Signal phase strings don't match junction | Verify in SUMO-GUI after netconvert |
-| OD matrix drives unrealistic routes | Tune `beta` in gravity model; check duarouter warnings |
-| Spillback not captured | Use `edgedata` density; add detectors near key intersections |
+Speed ratio tiers:
 
----
+| Tier | Speed ratio | Color |
+|------|------------|-------|
+| Severe | < 25% | 🔴 |
+| Heavy | 25–45% | 🟠 |
+| High | 45–60% | 🟡 |
+| Moderate | 60–75% | 🟡 |
+| Light | 75–90% | 🟢 |
+| Free flow | > 90% | 🟢 |
 
-## Dependencies
+## Results
 
-- **SUMO ≥ 1.18** — https://sumo.dlr.de
-- Python 3.10+ with packages in `requirements.txt`
+| Metric | Value |
+|--------|-------|
+| Total trips | 50,142 |
+| Completion rate | 99.8% |
+| Mean travel time | 9.6 min |
+| Median travel time | 8.3 min |
+| P90 travel time | 16.4 min |
+| Mean waiting time | 1.6 min |
+| Avg speed | 42.3 km/h |
+| Total delay | 503.7 hours |
+
+**Worst bottlenecks (morning peak):**
+1. Bd. Ștefan cel Mare × Str. Pușkin
+2. Bd. Dacia × Str. Ismail
+3. Calea Ieșilor × Str. Columna
+
+## Tech Stack
+
+| Tool | Purpose |
+|------|---------|
+| [SUMO 1.26.0](https://eclipse.dev/sumo/) | Microscopic traffic simulation |
+| [deck.gl 8.9](https://deck.gl) | WebGL visualization (TripsLayer, ScatterplotLayer) |
+| [sumolib](https://sumo.dlr.de/docs/Tools/Sumolib.html) | Network parsing & coordinate conversion |
+| [Folium](https://python-visualization.github.io/folium/) | Static congestion maps |
+| [pandas](https://pandas.pydata.org/) | Data analysis |
+| Python 3.14 | Orchestration & data pipeline |
+
+## License
+
+MIT
