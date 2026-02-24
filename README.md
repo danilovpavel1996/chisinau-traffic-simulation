@@ -14,6 +14,73 @@ This project builds a full city-scale microsimulation of Chișinău's road netwo
 - 📊 Calibrated to real Chișinău peak patterns (07:00–09:00 morning peak, 17:00–19:00 evening peak)
 - ✅ 99.8% trip completion rate, mean travel time 9.6 min
 
+## ⚠️ What's Not in This Repo
+
+The following files are **excluded from git** because they are either too large (>100MB) or fully regeneratable by running the pipeline. You must generate them before running the simulation:
+
+| File | Size | Why excluded | How to get it |
+|------|------|-------------|---------------|
+| `data/sumo_net/network.net.xml` | 298MB | Too large | Run `netconvert` (Step 2 below) |
+| `data/osm/chisinau_full.osm` | 281MB | Too large | Download from Overpass API (Step 1) |
+| `data/demand/trips.rou.xml` | 65MB | Regeneratable | Run `duarouter` (Step 3) |
+| `data/outputs/fcd_peak.xml` | 34MB | Regeneratable | Run SUMO simulation (Step 4) |
+| `data/outputs/deck.min.js` | 1.5MB | Third-party lib | `curl` one-liner (Step 5) |
+
+## 🚀 Quick Start — Full Pipeline
+
+Follow these steps in order to go from zero to running visualization:
+
+**Step 1 — Download OSM data**
+```bash
+# Download Chișinău OSM extract (bbox covers full city)
+# Go to https://overpass-api.de/api/map?bbox=28.75,46.90,29.00,47.08
+# Save as data/osm/chisinau_full.osm
+```
+
+**Step 2 — Build SUMO network**
+```bash
+netconvert --osm-files data/osm/chisinau_full.osm \
+  --output-file data/sumo_net/network.net.xml \
+  --geometry.remove --roundabouts.guess \
+  --ramps.guess --junctions.join \
+  --tls.guess-signals --tls.discard-simple \
+  --tls.join --tls.default-type actuated
+```
+
+**Step 3 — Generate routes** (assign paths to all 50,142 trips)
+```bash
+duarouter --net-file data/sumo_net/network.net.xml \
+  --route-files data/demand/trips.trips.xml \
+  --output-file data/demand/trips.rou.xml \
+  --ignore-errors --no-warnings
+```
+
+**Step 4 — Run the simulation**
+```bash
+cd data/outputs
+sumo -c corridor.sumocfg --duration-log.statistics true
+# Runtime: ~10-20 min depending on hardware
+# Outputs: fcd_peak.xml, edgedata.xml, tripinfo.xml
+```
+
+**Step 5 — Launch the visualization**
+```bash
+cd data/outputs
+
+# Download deck.gl library (one-time, ~1.5MB)
+curl -L -o deck.min.js "https://unpkg.com/deck.gl@8.9.35/dist.min.js"
+
+# Start local server
+python3 -m http.server 8765
+
+# Open in browser
+open http://localhost:8765/chisinau_traffic.html
+```
+
+> **Note:** Steps 1–4 require SUMO 1.26.0 installed. The visualization in Step 5 works standalone with the pre-computed files already included in the repo (`trips_deckgl.json`, `roads_congestion.geojson`, `traffic_lights.json`). If you just want to explore the visualization without re-running the simulation, skip to Step 5.
+
+---
+
 ## Interactive Visualization
 
 The `data/outputs/chisinau_traffic.html` file is a deck.gl web app showing:
@@ -72,37 +139,11 @@ chisinau-commute-upgrade/
 
 - Python 3.10+
 - SUMO 1.26.0 — [installation guide](https://sumo.dlr.de/docs/Downloads.php)
-- Python packages:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### Regenerating the SUMO network
-
-The `network.net.xml` file (298MB) is not included in this repo. To regenerate:
-
-```bash
-# Download Chișinău OSM extract
-# bbox: 28.75-29.00 lon, 46.90-47.08 lat
-# from https://overpass-api.de or https://extract.bbbike.org
-
-# Convert OSM to SUMO network
-netconvert --osm-files chisinau.osm \
-  --output-file data/sumo_net/network.net.xml \
-  --geometry.remove --roundabouts.guess \
-  --ramps.guess --junctions.join \
-  --tls.guess-signals --tls.discard-simple \
-  --tls.join --tls.default-type actuated
-```
-
-### Running the simulation
-
-```bash
-cd data/outputs
-sumo -c corridor.sumocfg --duration-log.statistics true
 ```
 
 ## Methodology
