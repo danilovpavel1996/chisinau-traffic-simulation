@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <input>
+        <net-file value="/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/sumo_net/network.net.xml"/>
+        <route-files value="/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/demand/trips.rou.xml"/>
+        <additional-files value="/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/outputs/edgedata.add.xml,/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/sumo_net/realistic_vehicles.add.xml"/>
+    </input>
+    <time>
+        <begin value="25200"/>
+        <end value="32400"/>
+        <step-length value="1"/>
+    </time>
+    <output>
+        <fcd-output value="/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/outputs/fcd_peak.xml"/>
+    </output>
+    <processing>
+        <ignore-route-errors value="true"/>
+        <time-to-teleport value="300"/>
+    </processing>
+</configuration>

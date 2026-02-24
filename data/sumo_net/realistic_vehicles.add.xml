@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<additional>
+    <!-- Realistic Chisinau passenger car -->
+    <vType id="passenger"
+           accel="3.5"
+           decel="5.0"
+           emergencyDecel="9.0"
+           sigma="0.3"
+           length="4.5"
+           minGap="2.0"
+           maxSpeed="55.6"
+           speedFactor="1.1"
+           speedDev="0.1"
+           tau="1.0"
+           lcStrategic="2.0"
+           lcCooperative="0.5"
+           lcSpeedGain="2.0"
+           guiShape="passenger"/>
+
+    <!-- Realistic bus -->
+    <vType id="bus"
+           accel="1.8"
+           decel="4.0"
+           emergencyDecel="7.0"
+           sigma="0.1"
+           length="12.0"
+           minGap="3.0"
+           maxSpeed="27.8"
+           speedFactor="0.95"
+           speedDev="0.05"
+           tau="1.5"
+           guiShape="bus"/>
+
+    <!-- Realistic truck -->
+    <vType id="truck"
+           accel="1.5"
+           decel="4.0"
+           emergencyDecel="7.0"
+           sigma="0.2"
+           length="12.0"
+           minGap="3.0"
+           maxSpeed="33.3"
+           speedFactor="0.95"
+           speedDev="0.05"
+           tau="1.5"
+           guiShape="truck"/>
+</additional>

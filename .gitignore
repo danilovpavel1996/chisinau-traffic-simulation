@@ -1,0 +1,42 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Large SUMO network (298MB - regenerate from OSM)
+data/sumo_net/network.net.xml
+data/sumo_net/*.osm
+data/sumo_net/*.osm.gz
+
+# Large demand files (regeneratable from trips.trips.xml)
+data/demand/trips.rou.xml
+data/demand/trips.rou.alt.xml
+
+# Large raw simulation outputs (regeneratable by running SUMO)
+data/outputs/fcd_peak.xml
+data/outputs/edgedata.xml
+data/outputs/baseline_edgedata.xml
+data/outputs/realistic_baseline_edgedata.xml
+data/outputs/baseline_tripinfo.xml
+data/outputs/realistic_baseline_tripinfo.xml
+data/outputs/tripinfo.xml
+
+# Kepler large exports (regeneratable)
+data/outputs/kepler_traffic.geojson
+data/outputs/kepler_traffic_time.geojson
+data/outputs/kepler_cars.csv
+
+# Third-party library (users run: curl -L -o deck.min.js "https://unpkg.com/deck.gl@8.9.35/dist.min.js")
+data/outputs/deck.min.js
+
+# Adaptive experiment folder
+data/outputs/adaptive/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

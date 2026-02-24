@@ -1,0 +1,9 @@
+completion_rate: 0.9978354978354979
+mean_travel_min: 9.965943600867678
+mean_waiting_min: 2.055075018076645
+median_travel_min: 9.95
+n_completed: 3688
+n_total: 3696
+p90_travel_min: 14.5
+p95_travel_min: 16.58833333333332
+total_delay_h: 200.12245555555558

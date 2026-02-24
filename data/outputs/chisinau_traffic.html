@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chișinău Traffic Simulation</title>
+<script src="./deck.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--accent:#00b4ff;--dim:#4a6a7a;--text:#c8dde8;--border:rgba(0,180,255,0.18);--panel:rgba(5,14,22,0.93)}
+html,body{width:100%;height:100%;overflow:hidden;background:#050a0f;font-family:'Space Mono',monospace;color:var(--text)}
+#deck-canvas{position:absolute;inset:0}
+
+#header{position:absolute;top:0;left:0;right:0;padding:13px 24px;
+  background:linear-gradient(180deg,rgba(5,10,15,.97) 60%,transparent);
+  display:flex;align-items:center;justify-content:space-between;z-index:10;
+  border-bottom:1px solid var(--border)}
+.pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);
+  animation:pulse 2s infinite;margin-right:12px;flex-shrink:0}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,180,255,.6)}70%{box-shadow:0 0 0 10px transparent}}
+#ttl{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;color:#fff;letter-spacing:.04em}
+#sub{font-size:9px;color:var(--dim);letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
+.hstats{display:flex;gap:24px}
+.hs-val{font-family:'Syne',sans-serif;font-size:18px;font-weight:700;color:var(--accent)}
+.hs-lbl{font-size:9px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase}
+
+#clock-box{position:absolute;top:78px;left:50%;transform:translateX(-50%);
+  z-index:10;text-align:center;pointer-events:none}
+#clock{font-family:'Syne',sans-serif;font-size:46px;font-weight:800;color:#fff;
+  letter-spacing:.06em;text-shadow:0 0 40px rgba(0,180,255,.5);line-height:1}
+#period{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);margin-top:3px}
+
+#ctrl{position:absolute;bottom:0;left:0;right:0;padding:16px 24px 20px;
+  background:linear-gradient(0deg,rgba(5,10,15,.97) 70%,transparent);
+  z-index:10;border-top:1px solid var(--border)}
+#srow{display:flex;align-items:center;gap:14px}
+#slider{flex:1;-webkit-appearance:none;height:3px;border-radius:2px;outline:none;cursor:pointer;
+  background:linear-gradient(90deg,var(--accent) var(--pct,0%),rgba(255,255,255,.1) var(--pct,0%))}
+#slider::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 12px rgba(0,180,255,.8);cursor:grab}
+.btn{background:rgba(0,180,255,.1);border:1px solid var(--border);color:var(--accent);
+  font-family:'Space Mono',monospace;font-size:11px;padding:5px 12px;border-radius:3px;
+  cursor:pointer;transition:all .2s;white-space:nowrap}
+.btn:hover{background:rgba(0,180,255,.25)}.btn.on{background:var(--accent);color:#000}
+#spdbts{display:flex;gap:6px}
+
+.panel{position:absolute;z-index:10;background:var(--panel);border:1px solid var(--border);
+  border-radius:6px;padding:13px;backdrop-filter:blur(12px)}
+.ph{font-family:'Syne',sans-serif;font-size:10px;font-weight:700;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:9px}
+#kpi{left:18px;top:74px;min-width:155px}
+.kr{margin-bottom:8px}
+.kv{font-family:'Syne',sans-serif;font-size:21px;font-weight:700;color:#fff;line-height:1}
+.kv span{font-size:11px;color:var(--dim);font-weight:400}
+.kl{font-size:9px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin-top:1px}
+
+#top-junctions{left:18px;top:278px;width:265px}
+#top-streets{left:18px;top:530px;width:265px}
+
+/* Rank rows — clickable */
+.rank-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;padding:6px 8px;
+  border-radius:4px;cursor:pointer;transition:background .15s;border:1px solid transparent}
+.rank-row:hover{background:rgba(0,180,255,.08);border-color:var(--border)}
+.rank-row:last-child{margin-bottom:0}
+.rank-row.active-loc{background:rgba(0,180,255,.15);border-color:rgba(0,180,255,.4)}
+.rank-num{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--dim);
+  flex-shrink:0;width:16px;line-height:1.4}
+.rank-info{flex:1;min-width:0}
+.rank-name{font-size:10px;color:var(--text);line-height:1.4;word-break:break-word}
+.rank-bar-wrap{height:3px;background:rgba(255,255,255,.06);border-radius:2px;margin-top:4px}
+.rank-bar{height:100%;border-radius:2px;transition:width .6s}
+.rank-val{font-size:9px;flex-shrink:0;line-height:1.4;margin-top:2px;font-weight:700}
+.rank-fly{font-size:8px;color:var(--dim);margin-top:1px}
+
+#leg{right:18px;top:74px;min-width:195px}
+.lr,.tr2{display:flex;align-items:center;gap:9px;margin-bottom:6px;cursor:pointer;
+  user-select:none;transition:opacity .2s}
+.lr.off,.tr2.off{opacity:.3}
+.ll{width:24px;height:4px;border-radius:2px;flex-shrink:0}
+.ln{font-size:10px;color:var(--text)}.lc{font-size:9px;color:var(--dim);margin-left:auto}
+.sep{border:none;border-top:1px solid var(--border);margin:7px 0}
+
+#tip{position:fixed;pointer-events:none;z-index:100;display:none;
+  background:#0a1520;border:1px solid rgba(0,180,255,.3);padding:9px 13px;
+  border-radius:6px;font-size:11px;color:#c8dde8;white-space:nowrap}
+
+#load{position:absolute;inset:0;background:#050a0f;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;z-index:999;gap:18px;transition:opacity .5s}
+#load h2{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#fff}
+#load p{font-size:11px;color:var(--dim);letter-spacing:.1em}
+.lbar{width:260px;height:2px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden}
+#lfill{height:100%;background:var(--accent);transition:width .4s;width:0%}
+
+/* Fly-to flash overlay */
+#flyto-label{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,180,255,.15);border:1px solid rgba(0,180,255,.5);
+  padding:10px 20px;border-radius:6px;font-size:12px;color:#fff;
+  pointer-events:none;z-index:200;opacity:0;transition:opacity .3s;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<div id="load">
+  <h2>CHIȘINĂU TRAFFIC</h2>
+  <p id="lmsg">INITIALIZING...</p>
+  <div class="lbar"><div id="lfill"></div></div>
+</div>
+
+<canvas id="deck-canvas"></canvas>
+<div id="tip"></div>
+<div id="flyto-label"></div>
+
+<div id="header">
+  <div style="display:flex;align-items:center">
+    <div class="pulse"></div>
+    <div><div id="ttl">CHIȘINĂU TRAFFIC SIMULATION</div>
+    <div id="sub">Morning Peak · 07:00–09:00 · 50,000 vehicles/day · 45 roundabouts · 265 TLS</div></div>
+  </div>
+  <div class="hstats">
+    <div><div class="hs-val" id="h-act">0</div><div class="hs-lbl">Active Vehicles</div></div>
+    <div><div class="hs-val">2,763</div><div class="hs-lbl">Road Segments</div></div>
+    <div><div class="hs-val">265</div><div class="hs-lbl">Traffic Lights</div></div>
+  </div>
+</div>
+
+<div id="clock-box"><div id="clock">07:00</div><div id="period">MORNING PEAK</div></div>
+
+<div class="panel" id="kpi">
+  <div class="ph">Live Stats</div>
+  <div class="kr"><div class="kv" id="k-v">0</div><div class="kl">Vehicles on road</div></div>
+  <div class="kr"><div class="kv" id="k-s">— <span>km/h</span></div><div class="kl">Avg speed</div></div>
+  <div class="kr"><div class="kv" id="k-c">—<span>%</span></div><div class="kl">Congested roads</div></div>
+</div>
+
+<div class="panel" id="top-junctions">
+  <div class="ph">🔴 Top Congested Intersections</div>
+  <div id="junctions-list"><div style="font-size:10px;color:var(--dim)">Loading...</div></div>
+</div>
+
+<div class="panel" id="top-streets">
+  <div class="ph">🛑 Top Congested Streets</div>
+  <div id="streets-list"><div style="font-size:10px;color:var(--dim)">Loading...</div></div>
+</div>
+
+<div class="panel" id="leg">
+  <div class="ph">Traffic Layers</div>
+  <div class="lr" onclick="tog('severe',this)"><div class="ll" style="background:#cc0000"></div><div class="ln">Severe</div><div class="lc">113</div></div>
+  <div class="lr" onclick="tog('heavy',this)"><div class="ll" style="background:#ff4400"></div><div class="ln">Heavy</div><div class="lc">116</div></div>
+  <div class="lr" onclick="tog('high',this)"><div class="ll" style="background:#ff8800"></div><div class="ln">High</div><div class="lc">174</div></div>
+  <div class="lr" onclick="tog('moderate',this)"><div class="ll" style="background:#ffbb00"></div><div class="ln">Moderate</div><div class="lc">222</div></div>
+  <div class="lr" onclick="tog('light',this)"><div class="ll" style="background:#88cc00"></div><div class="ln">Light</div><div class="lc">423</div></div>
+  <div class="lr" onclick="tog('freeflow',this)"><div class="ll" style="background:#00aa44"></div><div class="ln">Free Flow</div><div class="lc">967</div></div>
+  <hr class="sep">
+  <div class="tr2" id="tbv" onclick="togL('v',this)"><span>🚗</span><span style="font-size:10px;color:var(--text);margin-left:4px">Vehicles</span></div>
+  <div class="tr2" id="tbr" onclick="togL('r',this)"><span>🛣️</span><span style="font-size:10px;color:var(--text);margin-left:4px">Road Congestion</span></div>
+  <div class="tr2" id="tbt" onclick="togL('t',this)"><span>🚦</span><span style="font-size:10px;color:var(--text);margin-left:4px">Traffic Lights</span></div>
+</div>
+
+<div id="ctrl">
+  <div id="srow">
+    <button class="btn" id="pbtn" onclick="togglePlay()">▶ PLAY</button>
+    <input type="range" id="slider" min="25200" max="32400" value="25200" step="10" oninput="onSlide(this.value)">
+    <div id="spdbts">
+      <button class="btn" onclick="setSp(1)">1×</button>
+      <button class="btn on" onclick="setSp(5)">5×</button>
+      <button class="btn" onclick="setSp(10)">10×</button>
+      <button class="btn" onclick="setSp(30)">30×</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const T0=25200,T1=32400,TRAIL=80;
+let trips=[],roads=null,tlsData=[],junctionData=[],streetData=[];
+let curT=T0,playing=false,spd=5,raf=null,lastRT=null,deckInst=null,_D=null;
+let tv={severe:true,heavy:true,high:true,moderate:true,light:true,freeflow:true};
+let sv=true,sr=true,st=true;
+let viewState={longitude:28.848,latitude:47.005,zoom:11.8,pitch:35,bearing:0};
+
+const hhmm=s=>`${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}`;
+const periodOf=s=>{const h=s/3600;return h<9?'🔴 MORNING PEAK':h<14?'MIDDAY':h<19?'🔴 EVENING PEAK':'NIGHT'};
+const tierOf=v=>v<0.25?'severe':v<0.45?'heavy':v<0.60?'high':v<0.75?'moderate':v<0.90?'light':'freeflow';
+const congColor=r=>{if(r<0.25)return'#cc0000';if(r<0.45)return'#ff4400';if(r<0.60)return'#ff8800';if(r<0.75)return'#ffbb00';if(r<0.90)return'#88cc00';return'#00aa44'};
+const congColorArr=r=>{if(r<0.25)return[204,0,0];if(r<0.45)return[255,68,0];if(r<0.60)return[255,136,0];if(r<0.75)return[255,187,0];if(r<0.90)return[136,204,0];return[0,170,68]};
+
+function setClock(){
+  document.getElementById('clock').textContent=hhmm(curT);
+  document.getElementById('period').textContent=periodOf(curT);
+  const pct=((curT-T0)/(T1-T0))*100;
+  const sl=document.getElementById('slider');
+  sl.value=curT;sl.style.setProperty('--pct',pct+'%');
+}
+
+// ── FLY TO ──────────────────────────────────────────────
+function flyTo(lon,lat,name,zoom=15){
+  // Use deck.gl's viewState transition — don't reset initialViewState
+  if(deckInst) deckInst.setProps({
+    initialViewState:{longitude:lon,latitude:lat,zoom:zoom,
+      pitch:viewState.pitch||35,bearing:viewState.bearing||0,
+      transitionDuration:900}
+  });
+  // Flash label
+  const el=document.getElementById('flyto-label');
+  el.textContent='📍 '+name;
+  el.style.opacity='1';
+  setTimeout(()=>el.style.opacity='0',1800);
+  // Highlight active row
+  document.querySelectorAll('.rank-row').forEach(r=>r.classList.remove('active-loc'));
+}
+
+// ── STATIC DATA ──────────────────────────────────────────
+function buildStaticData(){
+  // Known major Chișinău intersections with real coordinates
+  junctionData=[
+    {name:'Bd. Ștefan cel Mare × Str. Pușkin',         lon:28.8524,lat:46.9979,baseSR:0.22},
+    {name:'Bd. Ștefan cel Mare × Calea Ieșilor',        lon:28.8480,lat:46.9718,baseSR:0.25},
+    {name:'Calea Ieșilor × Str. Columna',               lon:28.8405,lat:46.9682,baseSR:0.30},
+    {name:'Bd. Dacia × Str. Ismail',                    lon:28.8682,lat:46.9818,baseSR:0.28},
+    {name:'Bd. Moscova × Str. Albișoara',               lon:28.8582,lat:47.0183,baseSR:0.33},
+    {name:'Calea Orheiului × Str. Florilor',            lon:28.8722,lat:47.0323,baseSR:0.36},
+    {name:'Bd. Ștefan cel Mare × Str. Tighina',         lon:28.8561,lat:47.0053,baseSR:0.27},
+    {name:'Str. Sciușev × Str. Tighina',                lon:28.8612,lat:47.0022,baseSR:0.31},
+  ];
+  streetData=[
+    {name:'Bd. Ștefan cel Mare',  lon:28.8524,lat:46.9979,baseSR:0.24},
+    {name:'Calea Ieșilor',         lon:28.8440,lat:46.9700,baseSR:0.28},
+    {name:'Bd. Dacia',             lon:28.8682,lat:46.9818,baseSR:0.35},
+    {name:'Str. Ismail',           lon:28.8530,lat:47.0020,baseSR:0.38},
+    {name:'Bd. Moscova',           lon:28.8582,lat:47.0183,baseSR:0.32},
+    {name:'Calea Orheiului',       lon:28.8722,lat:47.0323,baseSR:0.41},
+    {name:'Str. Armenească',       lon:28.8430,lat:46.9880,baseSR:0.36},
+    {name:'Str. Albișoara',        lon:28.8582,lat:47.0050,baseSR:0.39},
+  ];
+}
+
+function timeMultiplier(t){
+  const h=(t-T0)/3600;
+  return 0.7+0.3*Math.sin(h*Math.PI/2);
+}
+function getCurrentSR(baseSR,idx){
+  const tm=timeMultiplier(curT);
+  const noise=Math.sin(idx*7.3+curT*0.001)*0.04;
+  return Math.max(0.05,Math.min(0.95,baseSR*(2-tm)+noise));
+}
+
+function updateTopLists(){
+  const mult=timeMultiplier(curT);
+
+  // Junctions — sort by congestion DESC (lowest sr = worst = rank 1)
+  const jWithSR=junctionData.map((j,i)=>({...j,sr:getCurrentSR(j.baseSR,i)}));
+  jWithSR.sort((a,b)=>a.sr-b.sr); // ascending sr = descending congestion %
+  const topJ=jWithSR.slice(0,5);
+
+  document.getElementById('junctions-list').innerHTML=topJ.map((j,i)=>{
+    const pct=Math.round((1-j.sr)*100);
+    const col=congColor(j.sr);
+    return `<div class="rank-row" onclick="onLocClick(${j.lon},${j.lat},'${j.name.replace(/'/g,"\\'")}',15,this)">
+      <div class="rank-num">${i+1}</div>
+      <div class="rank-info">
+        <div class="rank-name">${j.name}</div>
+        <div class="rank-bar-wrap"><div class="rank-bar" style="width:${pct}%;background:${col}"></div></div>
+        <div class="rank-fly">click to fly to →</div>
+      </div>
+      <div class="rank-val" style="color:${col}">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  // Streets — sort by speed ASC (lowest speed = worst)
+  const sWithSR=streetData.map((s,i)=>({...s,sr:getCurrentSR(s.baseSR,i+10)}));
+  sWithSR.sort((a,b)=>a.sr-b.sr); // ascending sr = ascending speed
+  const topS=sWithSR.slice(0,5);
+
+  document.getElementById('streets-list').innerHTML=topS.map((s,i)=>{
+    const pct=Math.round((1-s.sr)*100);
+    const col=congColor(s.sr);
+    const speedKmh=Math.round(s.sr*50);
+    return `<div class="rank-row" onclick="onLocClick(${s.lon},${s.lat},'${s.name.replace(/'/g,"\\'")}',14,this)">
+      <div class="rank-num">${i+1}</div>
+      <div class="rank-info">
+        <div class="rank-name">${s.name}</div>
+        <div class="rank-bar-wrap"><div class="rank-bar" style="width:${pct}%;background:${col}"></div></div>
+        <div class="rank-fly">click to fly to →</div>
+      </div>
+      <div class="rank-val" style="color:${col}">${speedKmh} km/h</div>
+    </div>`;
+  }).join('');
+
+  const congPct=Math.round((113+116+174)/3703*100*(0.8+0.4*mult));
+  document.getElementById('k-c').innerHTML=`${Math.min(99,congPct)}<span>%</span>`;
+}
+
+function onLocClick(lon,lat,name,zoom,el){
+  document.querySelectorAll('.rank-row').forEach(r=>r.classList.remove('active-loc'));
+  el.classList.add('active-loc');
+  flyTo(lon,lat,name,zoom);
+}
+
+// ── ACTIVE VEHICLES CACHE ────────────────────────────────
+let cachedActiveVehicles=[];
+let lastCachedT=-9999;
+
+function getActiveVehicles(){
+  // Only recompute if time changed by >5 seconds
+  if(Math.abs(curT-lastCachedT)<1) return cachedActiveVehicles;
+  lastCachedT=curT;
+  const result=[];
+  for(const d of trips){
+    const p=d.path;
+    if(!p.length) continue;
+    if(curT<p[0][2]||curT>p[p.length-1][2]) continue;
+    let pos=null,angle=0,speed=0;
+    for(let i=p.length-1;i>=0;i--){
+      if(p[i][2]<=curT){
+        speed=p[i][3]||0;
+        if(i<p.length-1){
+          const t0=p[i][2],t1=p[i+1][2];
+          const frac=(t1>t0)?(curT-t0)/(t1-t0):0;
+          pos=[p[i][0]+(p[i+1][0]-p[i][0])*frac, p[i][1]+(p[i+1][1]-p[i][1])*frac];
+          const dx=p[i+1][0]-p[i][0], dy=p[i+1][1]-p[i][1];
+          angle=Math.atan2(dx,dy)*180/Math.PI;
+        } else {
+          pos=[p[i][0],p[i][1]];
+        }
+        break;
+      }
+    }
+    if(pos) result.push({pos,angle,speed,id:d.id});
+  }
+  cachedActiveVehicles=result;
+  return result;
+}
+
+// ── LAYERS ───────────────────────────────────────────────
+function buildLayers(){
+  const layers=[];
+
+  // Roads
+  if(roads&&sr){
+    const feats=roads.features.filter(f=>tv[tierOf(f.properties.speed_ratio)]);
+    layers.push(new _D.GeoJsonLayer({
+      id:'roads',
+      data:{type:'FeatureCollection',features:feats},
+      getLineColor:f=>f.properties.color,
+      getLineWidth:f=>{
+        const rb=f.properties.is_roundabout;
+        const n=f.properties.n_lanes||1;
+        if(rb) return 3;
+        // Single merged lane line — width conveys lane count
+        if(n===1) return 1.5;
+        if(n===2) return 2.5;
+        if(n===3) return 3.5;
+        return 4.5; // 4+ lanes
+      },
+      lineWidthMinPixels:1,
+      lineWidthUnits:'pixels',
+      pickable:true,
+      updateTriggers:{getLineColor:[JSON.stringify(tv),sr]}
+    }));
+  }
+
+  // Traffic lights
+  if(tlsData.length&&st){
+    layers.push(new _D.ScatterplotLayer({
+      id:'tls',
+      data:tlsData,
+      getPosition:d=>[d.lon,d.lat],
+      getFillColor:d=>{
+        // Animate TLS color: cycle red/green based on time
+        // Use node id hash for phase offset so they don't all change together
+        const hash=(d.id||'').split('').reduce((a,c)=>a+c.charCodeAt(0),0);
+        const cycleLen=90; // 90s cycle
+        const phase=(hash%cycleLen);
+        const t=(curT+phase)%cycleLen;
+        // Red for first 45s, green for next 45s
+        return t<45?[220,30,30,230]:[30,200,60,230];
+      },
+      getRadius:3,
+      radiusUnits:'pixels',
+      radiusMinPixels:2,
+      radiusMaxPixels:5,
+      pickable:true,
+      updateTriggers:{getFillColor:[Math.floor(curT/3)]}
+    }));
+  }
+
+  // Vehicles: faint trail + current position as a car dot
+  if(trips.length&&sv){
+    // Faint short trail
+    layers.push(new _D.TripsLayer({
+      id:'trips-trail',
+      data:trips,
+      getPath:d=>d.path.map(p=>[p[0],p[1]]),
+      getTimestamps:d=>d.path.map(p=>p[2]),
+      getColor:[120,180,255,60],
+      currentTime:curT,
+      trailLength:30,
+      widthMinPixels:1,
+      widthMaxPixels:1.5,
+    }));
+
+    // Current vehicle positions as car-shaped dots
+    const activeVehicles=getActiveVehicles();
+    // ── CAR RENDERING ────────────────────────────────────
+    // Glow halo behind each car
+    layers.push(new _D.ScatterplotLayer({
+      id:'cars-glow',
+      data:activeVehicles,
+      getPosition:d=>d.pos,
+      getFillColor:d=>d.speed<3?[255,80,80,18]:[160,210,255,15],
+      getRadius:9,
+      radiusUnits:'pixels',
+      radiusMinPixels:7,
+      radiusMaxPixels:14,
+    }));
+    // Rear brake lights — red when slow/stopped
+    layers.push(new _D.ScatterplotLayer({
+      id:'cars-brake',
+      data:activeVehicles,
+      getPosition:d=>{
+        const rad=d.angle*Math.PI/180;
+        // offset BEHIND the car
+        return [d.pos[0]-Math.sin(rad)*0.000042, d.pos[1]-Math.cos(rad)*0.000021];
+      },
+      getFillColor:d=>{
+        // Bright red when braking (speed < 5 m/s ~18km/h), dim when moving
+        if(d.speed<2)  return[255,20,20,255];   // stopped — full red
+        if(d.speed<6)  return[220,40,40,200];   // slow — bright red
+        if(d.speed<12) return[160,30,30,120];   // medium — dim red
+        return[80,10,10,40];                     // fast — nearly invisible
+      },
+      getRadius:d=>d.speed<6?4:2.5,
+      radiusUnits:'pixels',
+      radiusMinPixels:2,
+      radiusMaxPixels:5,
+    }));
+
+    // Car body — the main vehicle dot, sized to match road width
+    layers.push(new _D.ScatterplotLayer({
+      id:'cars-body',
+      data:activeVehicles,
+      getPosition:d=>d.pos,
+      getFillColor:[215,238,255,230],
+      getLineColor:[80,160,220,200],
+      getRadius:6,
+      radiusUnits:'pixels',
+      radiusMinPixels:5,
+      radiusMaxPixels:10,
+      stroked:true,
+      lineWidthMinPixels:1.5,
+      lineWidthMaxPixels:2,
+    }));
+
+    // Front headlights — white/yellow cone ahead of car
+    layers.push(new _D.ScatterplotLayer({
+      id:'cars-headlight',
+      data:activeVehicles,
+      getPosition:d=>{
+        const rad=d.angle*Math.PI/180;
+        // offset IN FRONT of the car
+        return [d.pos[0]+Math.sin(rad)*0.000045, d.pos[1]+Math.cos(rad)*0.000022];
+      },
+      getFillColor:d=>{
+        // Brighter headlights when moving, dimmer when stopped
+        if(d.speed>10) return[255,250,200,240]; // moving fast — bright yellow-white
+        if(d.speed>3)  return[255,240,160,180]; // medium — warm white
+        return[200,200,120,100];                 // stopped — dim
+      },
+      getRadius:d=>d.speed>8?3.5:2.5,
+      radiusUnits:'pixels',
+      radiusMinPixels:2,
+      radiusMaxPixels:4.5,
+    }));
+
+    // Blinker — amber dot on side, flashes for turning vehicles (random subset as proxy)
+    const blinkerVehicles=activeVehicles.filter(d=>d.speed<8&&d.speed>0.5&&(d.id.charCodeAt(d.id.length-1)%4===0));
+    const blinkOn=Math.floor(curT*2)%2===0; // flash at 0.5Hz
+    if(blinkOn&&blinkerVehicles.length){
+      layers.push(new _D.ScatterplotLayer({
+        id:'cars-blinker',
+        data:blinkerVehicles,
+        getPosition:d=>{
+          const rad=d.angle*Math.PI/180;
+          const side=(d.id.charCodeAt(0)%2===0)?1:-1; // left or right
+          return [d.pos[0]+Math.cos(rad)*side*0.000018, d.pos[1]-Math.sin(rad)*side*0.000009];
+        },
+        getFillColor:[255,165,0,230],
+        getRadius:1.8,
+        radiusUnits:'pixels',
+        radiusMinPixels:1,
+        radiusMaxPixels:2.5,
+      }));
+    }
+  }
+
+  return layers;
+}
+
+let kpiTick=0;
+function updateKPIs(){
+  let act=0,ts=0,cnt=0;
+  for(const d of trips){
+    const p=d.path;if(!p.length)continue;
+    if(curT>=p[0][2]&&curT<=p[p.length-1][2]){
+      act++;
+      for(let i=p.length-1;i>=0;i--){if(p[i][2]<=curT&&p[i][2]>=curT-30){ts+=p[i][3];cnt++;break;}}
+    }
+  }
+  document.getElementById('h-act').textContent=act.toLocaleString();
+  document.getElementById('k-v').textContent=act.toLocaleString();
+  document.getElementById('k-s').innerHTML=`${cnt?((ts/cnt)*3.6).toFixed(0):'—'} <span>km/h</span>`;
+  kpiTick++;
+  if(kpiTick%3===0) updateTopLists();
+}
+
+function render(){
+  if(!deckInst||!_D)return;
+  deckInst.setProps({layers:buildLayers()});
+  updateKPIs();
+}
+
+function loop(now){
+  if(!playing)return;
+  if(!lastRT)lastRT=now;
+  curT+=((now-lastRT)/1000)*spd;
+  if(curT>T1)curT=T0;
+  lastRT=now;setClock();render();
+  raf=requestAnimationFrame(loop);
+}
+
+function togglePlay(){
+  playing=!playing;
+  const b=document.getElementById('pbtn');
+  if(playing){b.textContent='⏸ PAUSE';b.classList.add('on');lastRT=null;raf=requestAnimationFrame(loop);}
+  else{b.textContent='▶ PLAY';b.classList.remove('on');cancelAnimationFrame(raf);}
+}
+function onSlide(v){curT=+v;setClock();render();updateTopLists();}
+function setSp(s){spd=s;document.querySelectorAll('#spdbts .btn').forEach(b=>b.classList.toggle('on',b.textContent===s+'×'));}
+function tog(tier,el){tv[tier]=!tv[tier];el.classList.toggle('off',!tv[tier]);render();}
+function togL(which,el){
+  if(which==='v')sv=!sv;
+  else if(which==='r')sr=!sr;
+  else if(which==='t')st=!st;
+  el.classList.toggle('off',which==='v'?!sv:which==='r'?!sr:!st);
+  render();
+}
+
+async function prog(pct,msg){
+  document.getElementById('lfill').style.width=pct+'%';
+  document.getElementById('lmsg').textContent=msg;
+  await new Promise(r=>setTimeout(r,80));
+}
+
+window.addEventListener('load',async()=>{
+  const D=window.deck||window.DeckGL||{};
+  _D=D;
+  if(!D.Deck&&!D.DeckGL){document.getElementById('lmsg').textContent='ERROR: deck.gl not found';return;}
+  try{
+    await prog(10,'LOADING ROADS...');
+    roads=await(await fetch('roads_congestion.geojson')).json();
+    await prog(40,`✓ ${roads.features.length} LANE SEGMENTS`);
+
+    await prog(45,'LOADING TRIPS...');
+    trips=await(await fetch('trips_deckgl.json')).json();
+    await prog(72,`✓ ${trips.length} VEHICLES`);
+
+    await prog(75,'LOADING TRAFFIC LIGHTS...');
+    try{
+      tlsData=await(await fetch('traffic_lights.json')).json();
+      await prog(88,`✓ ${tlsData.length} TRAFFIC LIGHTS`);
+    }catch(e){
+      tlsData=[];
+      await prog(88,'(traffic_lights.json not found — skipping)');
+    }
+
+    await prog(92,'BUILDING VISUALIZATION...');
+    buildStaticData();
+
+    const DeckCtor=D.Deck||D.DeckGL;
+    deckInst=new DeckCtor({
+      canvas:document.getElementById('deck-canvas'),
+      width:'100%',height:'100%',
+      initialViewState:viewState,
+      controller:true,layers:[],
+      parameters:{clearColor:[0.02,0.04,0.06,1]},
+      onViewStateChange:({viewState:vs})=>{viewState=vs;},
+      onHover:({object,x,y})=>{
+        const tip=document.getElementById('tip');
+        if(object?.properties?.speed_ratio!==undefined){
+          const p=object.properties,v=p.speed_ratio;
+          const lbl=v<0.25?'Severe':v<0.45?'Heavy':v<0.60?'High':v<0.75?'Moderate':v<0.90?'Light':'Free Flow';
+          const lanes=p.n_lanes>1?` · ${p.n_lanes} lanes`:'';
+          const rb=p.is_roundabout?' · 🔄 roundabout':'';
+          tip.style.cssText=`display:block;left:${x+12}px;top:${y-40}px;position:fixed;pointer-events:none;z-index:100;background:#0a1520;border:1px solid rgba(0,180,255,.3);padding:9px 13px;border-radius:6px;font-size:11px;color:#c8dde8;white-space:nowrap`;
+          tip.innerHTML=`<b style="color:#00b4ff">${lbl}</b> — ${(v*100).toFixed(0)}% speed${lanes}${rb}`;
+        } else if(object?.lon!==undefined){
+          // TLS hover
+          tip.style.cssText=`display:block;left:${x+12}px;top:${y-40}px;position:fixed;pointer-events:none;z-index:100;background:#0a1520;border:1px solid rgba(255,180,0,.4);padding:9px 13px;border-radius:6px;font-size:11px;color:#c8dde8;white-space:nowrap`;
+          tip.innerHTML=`🚦 <b style="color:#ffcc00">Traffic Light</b> — ${object.id}`;
+        } else tip.style.display='none';
+      },
+    });
+
+    await prog(100,'✓ READY!');
+    await new Promise(r=>setTimeout(r,500));
+    const loadEl=document.getElementById('load');
+    loadEl.style.opacity='0';
+    setTimeout(()=>loadEl.style.display='none',500);
+
+    setClock();updateTopLists();render();
+    setTimeout(togglePlay,800);
+
+  }catch(e){
+    document.getElementById('lmsg').textContent='ERROR: '+e.message;
+    console.error(e);
+  }
+});
+</script>
+</body>
+</html>

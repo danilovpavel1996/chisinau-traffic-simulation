@@ -1,0 +1,465 @@
+demand:
+  od_file: data/demand/od_matrix.csv
+  peak_multipliers:
+    afternoon: 1.8
+    early_morning: 0.15
+    evening_peak: 7.0
+    evening_taper: 1.8
+    midday: 2.2
+    morning_peak: 8.0
+    morning_shoulder: 2.8
+    night: 0.4
+    offpeak: 1.0
+  routes_file: data/demand/trips.rou.xml
+  time_bin_minutes: 15
+  time_distribution:
+    afternoon:
+      end: 17
+      share: 0.12
+      start: 14
+    early_morning:
+      end: 7
+      share: 0.02
+      start: 0
+    evening_peak:
+      end: 19
+      share: 0.24
+      start: 17
+    evening_taper:
+      end: 21
+      share: 0.07
+      start: 19
+    midday:
+      end: 14
+      share: 0.14
+      start: 11
+    morning_peak:
+      end: 9
+      share: 0.28
+      start: 7
+    morning_shoulder:
+      end: 11
+      share: 0.1
+      start: 9
+    night:
+      end: 24
+      share: 0.03
+      start: 21
+  total_daily_vehicles: 50000
+  vehicle_mix:
+    bus: 0.05
+    passenger: 0.88
+    truck: 0.07
+network:
+  bbox:
+  - 28.8
+  - 46.94
+  - 28.9
+  - 47.04
+  net_file: data/sumo_net/network.net.xml
+  osm_file: data/osm/corridor.osm
+  poly_file: data/sumo_net/corridor.poly.xml
+outputs:
+  bottlenecks: data/outputs/baseline_bottlenecks.csv
+  dir: data/outputs
+  edgedata: data/outputs/edgedata.xml
+  metrics: data/outputs/baseline_metrics.parquet
+  tripinfo: data/outputs/tripinfo.xml
+project:
+  corridor: Airport ↔ Botanica
+  name: chisinau-commute-upgrade
+  version: 1.0.0
+signals:
+  adaptive:
+    max_green: 60
+    min_green: 10
+    pressure_threshold: 3
+  baseline_file: data/signals/baseline.add.xml
+  pilot_intersections:
+  - cycle_length: 90
+    id: '10723704047'
+    label: TLS_1
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '12108009134'
+    label: TLS_2
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_270521870_275585028_7661092998_7661093000_#1more
+    label: TLS_3
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_13299292347_388415522
+    label: TLS_4
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '652049987'
+    label: TLS_5
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '272305012'
+    label: TLS_6
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '652050037'
+    label: TLS_7
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '8399722983'
+    label: TLS_8
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '8399722977'
+    label: TLS_9
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '271248433'
+    label: TLS_10
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_280281226_9976639705
+    label: TLS_11
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '287319536'
+    label: TLS_12
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_278126689_9732369770_9732369772
+    label: TLS_13
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '300825152'
+    label: TLS_14
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_273707417_300873975_5344558625
+    label: TLS_15
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1591313887_286673357_5579967835
+    label: TLS_16
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '365152099'
+    label: TLS_17
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1033760704'
+    label: TLS_18
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '286123859'
+    label: TLS_19
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1258789440_12998420787
+    label: TLS_20
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1591314704'
+    label: TLS_21
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_2404521308_273672862
+    label: TLS_22
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '859683497'
+    label: TLS_23
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_12153261204_269416094_331196494_863039572_#3more
+    label: TLS_24
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_10031834838_274853945
+    label: TLS_25
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '392001926'
+    label: TLS_26
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '9729494385'
+    label: TLS_27
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1486104437'
+    label: TLS_28
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '270272777'
+    label: TLS_29
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_10700867652_10700867653_273983854
+    label: TLS_30
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_365974603_9729497510
+    label: TLS_31
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1258789429'
+    label: TLS_32
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1258789456_276641037_8657033874_8657033875
+    label: TLS_33
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1258789427'
+    label: TLS_34
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1255862174'
+    label: TLS_35
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1096407895_276630059
+    label: TLS_36
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_13065571421_13065571425_269421333
+    label: TLS_37
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_273707139_450993141
+    label: TLS_38
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_4567692370_5756611728
+    label: TLS_39
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '287122403'
+    label: TLS_40
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '281058807'
+    label: TLS_41
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1097122663_1097122789
+    label: TLS_42
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '7533546732'
+    label: TLS_43
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '5754092138'
+    label: TLS_44
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '10685323025'
+    label: TLS_45
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_2554227765_269525685
+    label: TLS_46
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1097122236_1097122827_287319596_325004961
+    label: TLS_47
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: cluster_1258789474_2404521444_273672871_364811343_#1more
+    label: TLS_48
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '1255862179'
+    label: TLS_49
+    phases:
+    - NS_straight
+    - EW_straight
+  - cycle_length: 90
+    id: '278126675'
+    label: TLS_50
+    phases:
+    - NS_straight
+    - EW_straight
+simulation:
+  begin: 0
+  end: 86400
+  peak_hours:
+    afternoon:
+      end: 17
+      start: 14
+    early_morning:
+      end: 7
+      start: 0
+    evening_peak:
+      end: 19
+      start: 17
+    evening_taper:
+      end: 21
+      start: 19
+    midday:
+      end: 14
+      start: 11
+    morning_peak:
+      end: 9
+      start: 7
+    morning_shoulder:
+      end: 11
+      start: 9
+    night:
+      end: 24
+      start: 21
+  seed: 123
+  step_length: 1
+zones:
+  botanica:
+    centroid:
+    - 28.8467
+    - 46.9689
+    job_weight: 0.08
+    label: Botanica
+    pop_weight: 0.2
+  buiucani:
+    centroid:
+    - 28.7974
+    - 47.0352
+    job_weight: 0.12
+    label: Buiucani
+    pop_weight: 0.18
+  centru:
+    centroid:
+    - 28.8576
+    - 46.9916
+    job_weight: 0.42
+    label: Centru
+    pop_weight: 0.12
+  ciocana:
+    centroid:
+    - 28.8997
+    - 47.0327
+    job_weight: 0.08
+    label: Ciocana
+    pop_weight: 0.14
+  durlesti:
+    centroid:
+    - 28.79
+    - 47.01
+    job_weight: 0.05
+    label: Durlesti
+    pop_weight: 0.08
+  riscani:
+    centroid:
+    - 28.86
+    - 47.028
+    job_weight: 0.12
+    label: Riscani
+    pop_weight: 0.18
+  sculeni:
+    centroid:
+    - 28.82
+    - 47.045
+    job_weight: 0.05
+    label: Sculeni
+    pop_weight: 0.08
+  telecentru:
+    centroid:
+    - 28.875
+    - 46.982
+    job_weight: 0.08
+    label: Telecentru
+    pop_weight: 0.1

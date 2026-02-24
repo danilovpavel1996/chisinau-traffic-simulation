@@ -1,0 +1,154 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<additional>
+  <!-- Baseline fixed-time signal plans — Airport↔Botanica corridor -->
+  <tlLogic id="J_AEROPORT" type="static" programID="baseline" offset="0">
+    <phase duration="19" state="GGrrGGrr">
+      <!--NS_straight-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="19" state="rrGGrrGG">
+      <!--EW_straight-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="13" state="ggrrggrr">
+      <!--NS_left-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="6" state="rrggrrgg">
+      <!--EW_left-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+  </tlLogic>
+  <!-- Aeroport Junction — cycle 90s, phases: ['NS_straight', 'EW_straight', 'NS_left', 'EW_left'] -->
+  <tlLogic id="J_DACIA" type="static" programID="baseline" offset="0">
+    <phase duration="39" state="GGrrGGrr">
+      <!--NS_straight-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="39" state="rrGGrrGG">
+      <!--EW_straight-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+  </tlLogic>
+  <!-- Dacia Blvd / Aeroportului — cycle 100s, phases: ['NS_straight', 'EW_straight'] -->
+  <tlLogic id="J_MUNCII" type="static" programID="baseline" offset="0">
+    <phase duration="30" state="GGrrGGrr">
+      <!--NS_straight-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="30" state="rrGGrrGG">
+      <!--EW_straight-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+  </tlLogic>
+  <!-- Str. Muncii intersection — cycle 80s, phases: ['NS_straight', 'EW_straight'] -->
+  <tlLogic id="J_INDEPENDENTEI" type="static" programID="baseline" offset="0">
+    <phase duration="27" state="GGrrGGrr">
+      <!--NS_straight-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="25" state="rrGGrrGG">
+      <!--EW_straight-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="12" state="ggrrggrr">
+      <!--NS_left-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+  </tlLogic>
+  <!-- Independentei crossroad — cycle 90s, phases: ['NS_straight', 'EW_straight', 'NS_left'] -->
+  <tlLogic id="J_BOTANICA_MAIN" type="static" programID="baseline" offset="0">
+    <phase duration="25" state="GGrrGGrr">
+      <!--NS_straight-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="25" state="rrGGrrGG">
+      <!--EW_straight-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="17" state="ggrrggrr">
+      <!--NS_left-->
+    </phase>
+    <phase duration="4" state="yyrryyrr">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+    <phase duration="8" state="rrggrrgg">
+      <!--EW_left-->
+    </phase>
+    <phase duration="4" state="rryyrryy">
+      <!--yellow-->
+    </phase>
+    <phase duration="2" state="rrrrrrrr">
+      <!--all-red-->
+    </phase>
+  </tlLogic>
+  <!-- Botanica Main Gate — cycle 110s, phases: ['NS_straight', 'EW_straight', 'NS_left', 'EW_left'] -->
+</additional>

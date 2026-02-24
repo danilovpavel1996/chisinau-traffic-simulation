@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<additional>
+    <edgeData id="ed_all" freq="900" file="/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/outputs/edgedata.xml"
+              excludeEmpty="true"
+              speedThreshold="-1"/>
+</additional>

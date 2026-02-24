@@ -1,0 +1,23 @@
+# Core
+pyyaml>=6.0
+lxml>=4.9
+numpy>=1.24
+pandas>=2.0
+pyarrow>=12.0       # parquet support
+
+# Visualisation
+matplotlib>=3.7
+seaborn>=0.12
+
+# Notebooks
+jupyterlab>=4.0
+ipywidgets>=8.0
+
+# SUMO Python bindings
+# NOTE: traci ships with SUMO. Install SUMO from https://sumo.dlr.de/docs/Downloads.php
+# Then: pip install traci  OR  use the version bundled in $SUMO_HOME/tools
+traci>=1.18
+
+# Optional geo utilities
+shapely>=2.0
+pyproj>=3.5
