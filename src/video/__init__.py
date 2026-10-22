@@ -4,7 +4,10 @@ Dashcam / phone video → traffic data.
     perception.py   detection + tracking + optical flow  (one pass over the video)
     motion.py       the car's own motion: speed, rotation, turns, stops
     traffic.py      other road users: track labels (oncoming, parked, …), per-minute counts
-    scene.py        street-scene segmentation: crosswalks, lanes, curbs, guard rails, signs
+    scene.py        street-scene segmentation: crosswalks, lanes, curbs, guard rails, signs (+ class maps)
+    road_geometry.py camera-independent road width and side-street openings from the class maps
+    events.py       the video as junction events (turns, roundabouts, crosswalks, signals, openings)
+    event_match.py  video-only route from start + destination: events aligned with map routes
     roads.py        OpenStreetMap street graph
     localize.py     particle-filter map matching of a GPS-less drive
     truth.py        ground-truth route from a driver's street directions

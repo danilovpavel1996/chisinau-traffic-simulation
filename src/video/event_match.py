@@ -54,7 +54,11 @@ FEATURES = ROOT / "data" / "osm" / "junction_features.parquet"
 
 # detection reliability (daylight) → costs
 MISS = dict(turn=3.0, roundabout=3.0, signal=1.0, crossing=0.6, junction=0.15)
-FALSE = dict(turn=2.5, crosswalk=1.2, signal=0.8, small_turn=0.5)
+FALSE = dict(turn=2.5, crosswalk=1.2, signal=0.8, small_turn=0.5, opening=0.35)
+RERANK = 30             # best routes by alignment that are re-scored on road width
+WIDTH_WEIGHT = 4.0      # cost reduction per unit of width correlation (video vs map road size)
+HIGHWAY_LANES = dict(motorway=6, trunk=5, primary=4, secondary=3, tertiary=2, unclassified=2,
+                     residential=1.5, living_street=1, service=1)
 
 
 # ── Map side ──────────────────────────────────────────────────────────────────
@@ -209,6 +213,8 @@ def false_cost(e) -> float:
         return FALSE["crosswalk"]
     if e.signal:
         return FALSE["signal"]
+    if getattr(e, "opening", False) and abs(e.turn_deg) <= TURN:
+        return FALSE["opening"]
     return FALSE["small_turn"]
 
 
@@ -231,6 +237,8 @@ def match_cost(e, s, m_obs: float, m_exp: float, sigma: float) -> float:
         c += -1.0 if s.crossing else 0.8                                 # OSM misses crossings → mild
     if e.signal:
         c += -1.0 if s.signal else 0.5
+    if getattr(e, "opening", False):
+        c += -0.4 if s.junction else 0.4                                 # a side street opens at junctions
     if not s.junction and not e.crosswalk and not e.signal:
         c += 1.0                                                         # a bare crossing site needs a crossing cue
     return c
@@ -281,6 +289,54 @@ def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
     return e.t.to_numpy(), np.cumsum(v * e.t.diff().fillna(0).to_numpy())
 
 
+def positions(ev, s, pairs, tt, mm):
+    """Per-second position along the route: matched sites are anchors (time, distance);
+    between them the distance follows the video odometer."""
+    L = s.attrs["length"]
+    anchors = sorted([(tt[0], 0.0)] + [(ev.t.iat[i], s.d.iat[j]) for i, j in pairs] + [(tt[-1], L)])
+    a_t, a_d = np.array([a[0] for a in anchors]), np.maximum.accumulate([a[1] for a in anchors])
+    secs = np.arange(int(tt[0]), int(tt[-1]) + 1)
+    d_s = np.interp(np.interp(secs, tt, mm), np.interp(a_t, tt, mm), a_d)
+    pts, cum = s.attrs["pts"], s.attrs["cum"]
+    return secs, np.interp(d_s, cum, pts[:, 0]), np.interp(d_s, cum, pts[:, 1]), d_s
+
+
+def road_width(drv: dict):
+    f = drv["folder"] / "road.parquet"
+    if not f.exists():
+        return None
+    rd = pd.read_parquet(f)
+    rd = rd[rd.in_window & rd.width.notna()]
+    return rd[["t", "width"]] if len(rd) > 20 else None
+
+
+def lanes_of(d: dict) -> float:
+    """Expected road size from OSM: 'lanes' (total) if tagged, else by road class."""
+    try:
+        v = [float(x) for x in str(d.get("lanes", "")).replace("[", "").replace("]", "").replace("'", "").split(",") if x.strip()]
+        if v:
+            return max(v)
+    except ValueError:
+        pass
+    hw = d.get("highway", "")
+    hw = hw[0] if isinstance(hw, list) else hw
+    return HIGHWAY_LANES.get(str(hw).replace("_link", ""), 2)
+
+
+def width_agreement(R: "RouteMap", path, s, secs, d_s, width) -> float:
+    """Spearman correlation of the video's road width with the map's road size along the route."""
+    edge_end, size = [], []
+    run = 0.0
+    for u, v in zip(path, path[1:]):
+        run += R.D[u][v]["length"]
+        edge_end.append(run); size.append(lanes_of(R.edge(u, v)))
+    d_at = np.interp(width.t, secs, d_s)
+    exp = np.array(size)[np.clip(np.searchsorted(edge_end, d_at), 0, len(size) - 1)]
+    a, b = pd.Series(width.width.to_numpy()).rank(), pd.Series(exp).rank()
+    c = a.corr(b)
+    return 0.0 if np.isnan(c) else float(c)
+
+
 def run(drv: dict):
     t_start = time.time()
     ev = pd.read_parquet(drv["folder"] / "events.parquet")
@@ -296,18 +352,23 @@ def run(drv: dict):
         cost, pairs = align(ev, s, m_ev, m_total)
         scored.append((cost, path, s, pairs))
     scored.sort(key=lambda x: x[0])
+    # re-rank the best routes on road width: does the video's road get wider / narrower
+    # where the map's road does? (rank correlation → only the pattern matters, any camera)
+    width = road_width(drv)
+    if width is not None:
+        rescored = []
+        for cost, path, s, pairs in scored[:RERANK]:
+            secs, lat, lon, d_s = positions(ev, s, pairs, tt, mm)
+            corr = width_agreement(R, path, s, secs, d_s, width)
+            rescored.append((cost - WIDTH_WEIGHT * corr, path, s, pairs, corr))
+        rescored.sort(key=lambda x: x[0])
+        print(f"  road-width check on the best {len(rescored)} routes: chosen route width correlation "
+              f"{rescored[0][4]:+.2f} (alignment-only choice {next(r[4] for r in rescored if r[1] is scored[0][1]):+.2f})")
+        scored = [r[:4] for r in rescored] + scored[RERANK:]
     cost, path, s, pairs = scored[0]
 
-    # per-second position: anchors (video time, distance along route) from matched sites
+    secs, lat, lon, d_s = positions(ev, s, pairs, tt, mm)
     L = s.attrs["length"]
-    anchors = [(tt[0], 0.0)] + [(ev.t.iat[i], s.d.iat[j]) for i, j in pairs] + [(tt[-1], L)]
-    anchors = sorted(anchors)
-    a_t, a_d = np.array([a[0] for a in anchors]), np.maximum.accumulate([a[1] for a in anchors])
-    secs = np.arange(int(tt[0]), int(tt[-1]) + 1)
-    m_s = np.interp(secs, tt, mm); m_a = np.interp(a_t, tt, mm)
-    d_s = np.interp(m_s, m_a, a_d)                     # between anchors, distance follows the odometer
-    pts, cum = s.attrs["pts"], s.attrs["cum"]
-    lat, lon = np.interp(d_s, cum, pts[:, 0]), np.interp(d_s, cum, pts[:, 1])
     names = []
     for u, v in zip(path, path[1:]):
         n = street_name(R.edge(u, v))

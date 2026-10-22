@@ -61,7 +61,12 @@ CLASSES = {            # Vistas label → short name stored in the output
     "Traffic Sign (Front)": "sign_front",
     "Traffic Light": "traffic_light",
     "Car": "car", "Bus": "bus", "Truck": "truck",
+    "Street Light": "street_light", "Pole": "pole", "Utility Pole": "pole", "Traffic Sign Frame": "pole",
+    "Curb Cut": "curb_cut", "Barrier": "barrier", "Building": "building", "Vegetation": "vegetation",
+    "Sky": "sky", "Person": "person", "Bicyclist": "person", "Motorcyclist": "person",
 }
+MASK_STEP = 8          # stored class map: every 8th pixel (960 px → 120 columns)
+CODES = sorted(set(CLASSES.values())) + ["other"]     # class map value → short name
 
 
 def candidate_times(drv: dict) -> list[float]:
@@ -106,6 +111,11 @@ def describe(seg: np.ndarray, names: np.ndarray, t: float) -> dict:
     cw_rows = np.flatnonzero((names[seg] == "crosswalk").any(axis=1))
     r["crosswalk_bottom"] = float(cw_rows.max() / h) if len(cw_rows) else np.nan   # 1.0 = at the bonnet
     r["scanlines"] = json.dumps({f"{y:.2f}": runs(seg[int(y * h) - 1], names) for y in SCANLINES})
+    # small class map of the whole frame, for features computed later without the model
+    code = {c: i for i, c in enumerate(CODES)}
+    small = names[seg[::MASK_STEP, ::MASK_STEP]]
+    r["mask"] = np.vectorize(code.get)(small).astype(np.uint8).tobytes()
+    r["mask_shape"] = json.dumps(list(small.shape))
     return r
 
 
@@ -180,7 +190,8 @@ def export_colab(drv: dict):
     bar.close()
     code = "\n\n".join([
         "import json\nimport numpy as np",
-        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}",
+        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}\n"
+        f"MASK_STEP = {MASK_STEP}\nCODES = {CODES!r}",
         inspect.getsource(runs), inspect.getsource(describe)])
     nb = notebook(drv["key"], zpath.name, code)
     (out / "scene_colab.ipynb").write_text(json.dumps(nb, indent=1))
@@ -287,17 +298,18 @@ def run_colab(drv: dict):
         export_colab(drv)
     code = "\n\n".join([
         "import json\nimport numpy as np",
-        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}",
+        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}\n"
+        f"MASK_STEP = {MASK_STEP}\nCODES = {CODES!r}",
         inspect.getsource(runs), inspect.getsource(describe)])
     job = out / "remote_scene.py"
     job.write_text(remote_script(code))
     result = out / "scene.colab.parquet"
     session = "scene-" + drv["key"].replace("_", "-").lower()
 
-    def colab(*args):
+    def colab(*args, check=True):
         cmd = [str(COLAB), "--auth", "oauth2", *args]
         print("$ colab " + " ".join(shlex.quote(a) for a in args), flush=True)
-        subprocess.run(cmd, check=True)
+        return subprocess.run(cmd, check=check).returncode
 
     t0 = time.time()
     try:
@@ -312,7 +324,10 @@ def run_colab(drv: dict):
         print("3/5 installing transformers on the VM…", flush=True)
         colab("install", "-s", session, "transformers==4.46.3")
         print("4/5 segmenting on the GPU…", flush=True)
-        colab("exec", "-s", session, "-f", str(job))
+        if colab("exec", "-s", session, "-f", str(job), check=False):
+            # the CLI can time out waiting for the kernel's final reply although the job
+            # finished (seen after 'done: 887 frames') → still try to fetch the result
+            print("   (exec reported an error — checking whether the result exists anyway)", flush=True)
         print("5/5 downloading the result…", flush=True)
         colab("download", "-s", session, "/content/scene.parquet", str(result))
     finally:

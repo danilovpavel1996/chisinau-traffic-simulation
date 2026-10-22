@@ -147,3 +147,21 @@ against OSM POIs are right in 10/16 cases on the GPS drive (within 150 m) — so
     attributed to the next signal AHEAD on the driven route instead.
 16. **Colab file API**: uploads > ~30 MB and into missing folders fail (HTTP 500) → 25 MB parts.
 17. **YAML** reads an unquoted 2026_10_22_18_16 as an integer → drive keys are quoted.
+
+## Event-based route matching (2026-10-23)
+
+Input per video: start + destination (given by the uploader), date/time from the video.
+The video becomes junction events (turns, roundabouts, crosswalks, close traffic lights,
+right-side openings); 300 candidate routes start → destination are aligned with them
+(Needleman–Wunsch, detectability-based costs, odometer timing), re-ranked by road-width
+agreement (rank correlation of the video's road width with the map's road size).
+
+| Drive | Route chosen | Result |
+|---|---|---|
+| Morning, daylight (phone) | Mircești → Petricani → Mihai Viteazul → Columna → Henri Coandă → Cantemir → Calea Ieșilor | **99 % of the true route, all within 30 m** (12 → 20 events once side-street openings were added; margin to the runner-up small) |
+| Evening, dusk (dashcam) | 80 % of the junctions passed are on the chosen route | right junction at the right moment: 0 % — night events are mostly noise |
+
+Measured cues (evening drive vs GPS): right-side openings precision 50 % (chance 19 %),
+left side ≈ chance (opposite carriageway); cross traffic at night 33 % (chance 22 %) — not used.
+Road width (half-width ÷ distance below the horizon, from the class maps) orders boulevards
+vs side streets within a video; queued cars inflate it.

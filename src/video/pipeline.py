@@ -8,6 +8,7 @@ Run every step for one drive, in order:
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
     scene        → scene.parquet: crosswalks, lane markings, curbs, guard rails (~20 min)
     localize     → match.json (video-only route on the map, accuracy vs truth / GPS)
+    road         → road.parquet: road width + side-street openings from the class maps
     events       → events.parquet: junction events seen in the video (turns, roundabouts, crosswalks, signals)
     event_match  → event_match.json: video-only route from start + destination (event-based)
     position     → trace.parquet: where the car is every second (GPS if available, else the match)
@@ -30,7 +31,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "events", "event_match", "position", "lanes", "signs", "streets", "dashboard"]
+STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "position", "lanes", "signs", "streets", "dashboard"]
 
 
 def run_step(step: str, drv: dict):
@@ -46,6 +47,9 @@ def run_step(step: str, drv: dict):
     elif step == "scene":
         from src.video import scene
         scene.run(drv)
+    elif step == "road":
+        from src.video import road_geometry
+        road_geometry.run(drv)
     elif step == "events":
         from src.video import events
         events.run(drv)

@@ -10,6 +10,9 @@ Cues
     crosswalk    the car drives over a crosswalk (scene segmentation)
     signal       a traffic light detected close (large in the frame), last moment seen
     stop         the car comes to a standstill (possible junction ahead)
+    opening      a side street opens on the right (road_geometry.py) — junctions
+                 without crosswalks; right side only (the left is usually the
+                 opposite carriageway: measured precision 20 % ≈ chance, right 50 %)
 Cues within MERGE_S seconds are one junction event (a crosswalk and a turn at the
 same junction). A stop only joins an event, it never makes one on its own.
 
@@ -60,6 +63,11 @@ def cue_list(drv: dict) -> pd.DataFrame:
                 cues.append(dict(t=float(g.t.iat[-1]), kind="signal"))
     for r in stops(e).itertuples():
         cues.append(dict(t=float(r.t_end), kind="stop"))
+    rf = folder / "road.parquet"
+    if rf.exists():
+        rd = pd.read_parquet(rf)
+        for t in rd[rd.open_right].t:
+            cues.append(dict(t=float(t), kind="opening"))
     t0, t1 = drv.get("street_window_s", [0, 1e9])
     return pd.DataFrame(cues).query("@t0 <= t <= @t1").sort_values("t").reset_index(drop=True)
 
@@ -80,6 +88,7 @@ def merge(cues: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame([dict(t=(e["t_first"] + e["t_last"]) / 2, turn_deg=round(e["turn_deg"]),
                              roundabout="roundabout" in e["cues"], crosswalk="crosswalk" in e["cues"],
                              signal="signal" in e["cues"], stopped="stop" in e["cues"],
+                             opening="opening" in e["cues"],
                              cues="+".join(sorted(e["cues"]))) for e in events])
     return out
 
