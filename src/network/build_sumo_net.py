@@ -6,7 +6,7 @@ patch list of known lane-count / speed / direction corrections.
 
 Usage
 -----
-    python src/network/build_sumo_net.py --config src/config/scenario.yaml
+    python src/network/build_sumo_net.py --config configs/scenario.yaml
     python src/network/build_sumo_net.py --osm data/osm/corridor.osm \\
                                           --out data/sumo_net/network.net.xml
 
@@ -134,7 +134,7 @@ def qa_summary(net_file: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Build SUMO network from OSM")
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     parser.add_argument("--osm",    help="Override OSM file path")
     parser.add_argument("--out",    help="Override net.xml output path")
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 """
-viewer.py
----------
+viewer/build.py
+---------------
 Build an interactive viewer for one drive: the video next to the map, in sync.
 
     video     with optional live overlay of detected vehicles / traffic lights
@@ -11,10 +11,10 @@ Build an interactive viewer for one drive: the video next to the map, in sync.
     panel     clock time, street, speed, distance from the true route
 
 Usage:
-    .venv-video/bin/python -m src.video.viewer <drive>
+    .venv-video/bin/python -m src.video.viewer.build <drive>
 
-Needs: match.json (src.video.pf_match), detections.parquet + ego.parquet
-(src.video.detect_track). Writes data/video/processed/<drive>/viewer.html and,
+Needs: match.json (src.video.localize), detections.parquet + ego.parquet
+(src.video.perception). Writes data/video/processed/<drive>/viewer.html and,
 if missing, a 720p H.264 copy of the video (browsers play it everywhere).
 Open viewer.html in Chrome or Safari — no server needed.
 """
@@ -30,7 +30,8 @@ import numpy as np
 import pandas as pd
 
 from src.video import drives
-from src.video.analyze import VEHICLES, dominant_light, ego_states, stops, turns
+from src.video.motion import ego_states, stops, turns
+from src.video.traffic import VEHICLES, dominant_light
 
 PROXY = "viewer_720p.mp4"
 
@@ -92,18 +93,20 @@ def build_data(drv: dict) -> dict:
                 states=states, detections=frames, events=events)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("drive", help="drive key in src/config/drives.yaml")
-    a = ap.parse_args()
-    drv = drives.load(a.drive)
+def run(drv: dict):
     make_proxy(drv["video"], drv["folder"] / PROXY)
     data = build_data(drv)
-    html = (Path(__file__).with_name("viewer_template.html").read_text()
+    html = (Path(__file__).with_name("template.html").read_text()
             .replace("/*__DATA__*/null", json.dumps(data, separators=(",", ":"))))
     out = drv["folder"] / "viewer.html"
     out.write_text(html)
     print(f"→ {out}  ({out.stat().st_size / 1e6:.1f} MB)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
+    run(drives.load(ap.parse_args().drive))
 
 
 if __name__ == "__main__":

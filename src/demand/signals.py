@@ -11,7 +11,7 @@ Phase structure (simplified):
 
 Usage
 -----
-    python src/demand/signals.py --config src/config/scenario.yaml
+    python src/demand/signals.py --config configs/scenario.yaml
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def generate_baseline_xml(cfg: dict, out_file: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     args = parser.parse_args()
 
     with open(args.config) as f:

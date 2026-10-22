@@ -11,7 +11,7 @@ Usage:
 import os, json, re, time
 from collections import defaultdict
 
-BASE    = os.path.dirname(os.path.abspath(__file__))
+BASE    = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 FCD     = os.path.join(BASE, 'data/outputs/fcd_full.xml')
 OUT     = os.path.join(BASE, 'data/outputs/trips_deckgl.json')
 

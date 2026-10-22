@@ -1,12 +1,18 @@
-# Dashcam video pipeline (src/video). Separate venv: torch has no Intel-Mac
-# wheels after 2.2.2, which needs Python <= 3.12.
+# Video pipeline (src/video). Separate venv: torch has no Intel-Mac wheels after
+# 2.2.2, which needs Python <= 3.12 and NumPy < 2 — everything below is pinned to
+# stay compatible with that (newer geopandas / pandas 3 pull NumPy 2 and break torch).
 #   python3.11 -m venv .venv-video && .venv-video/bin/pip install -r requirements-video.txt
 torch==2.2.2
 torchvision==0.17.2
-numpy<2
+numpy>=1.26,<2
 ultralytics>=8.4
 lap
-pandas>=2.0
-pyarrow<20
+pandas>=2.2,<3
+pyarrow>=15,<20
 matplotlib>=3.7
-yt-dlp
+pyyaml>=6.0
+osmnx>=2.0,<2.2
+geopandas>=1.0,<1.1
+shapely>=2.0,<2.1
+networkx>=3.0
+pytest>=8

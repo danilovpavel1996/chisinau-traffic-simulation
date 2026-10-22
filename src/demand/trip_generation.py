@@ -14,7 +14,7 @@ Duarouter is called at the end of this script.
 
 Usage
 -----
-    python src/demand/trip_generation.py --config src/config/scenario.yaml
+    python src/demand/trip_generation.py --config configs/scenario.yaml
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ def run_duarouter(trips_file: str, net_file: str, routes_file: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     parser.add_argument("--skip-router", action="store_true",
                         help="Skip duarouter (write trips only)")
     args = parser.parse_args()

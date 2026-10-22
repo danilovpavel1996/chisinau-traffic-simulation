@@ -1,22 +1,22 @@
 """
-detect_track.py
----------------
-Single pass over a dashcam video:
+perception.py
+-------------
+Single pass over a drive's video:
   - YOLO detection + ByteTrack tracking of vehicles and traffic lights
-  - optical flow: ego speed index, turning (yaw), and per-vehicle motion
-    relative to its background (parked vs moving)
   - colour (red / yellow / green) of every detected traffic light
+  - optical flow: the car's own motion (speed, rotation, horizon row) and each
+    vehicle's motion relative to the road below it (parked vs moving)
 
 Usage:
-    .venv-video/bin/python -m src.video.detect_track data/video/raw/clip.mp4 \
-        --start 540 --duration 180 --preview [--model models/yolo11s.pt --tag s]
+    .venv-video/bin/python -m src.video.perception <drive> [--ego-only]
 
-Outputs (data/video/processed/<video_name>/):
+Settings (stride, bonnet line) come from configs/drives.yaml.
+Outputs (data/video/processed/<drive>/):
     detections.parquet   one row per (sampled frame, detected object), incl. object vs
-                         background flow (obj_dx/dy, bg_dx/dy) for parked-car detection
-    ego.parquet          one row per sampled frame: ego_mag (speed index), yaw_dx (turning)
+                         road flow (obj_dx/dy, bg_dx/dy) for parked-car detection
+    ego.parquet          one row per sampled frame: ego_mag, yaw_dx/yaw_slope,
+                         bandN_dy + foe_y (road-plane speed)
     meta.json            video + run parameters
-    preview.mp4          annotated video (with --preview)
 """
 
 from __future__ import annotations
@@ -31,11 +31,15 @@ import numpy as np
 import pandas as pd
 from ultralytics import YOLO
 
+from src.video import drives
+from src.video.drives import ROOT
+
 # COCO class ids we care about
 CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck", 9: "traffic_light"}
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
 
-OUT_ROOT = Path("data/video/processed")
+MODEL = ROOT / "models" / "yolo11s.pt"   # yolo11s: ~2x the oncoming/light recall of yolo11n, 1.45x slower on CPU
+TRACKER = str(Path(__file__).with_name("bytetrack_dashcam.yaml"))
 
 
 # ── Traffic light colour ──────────────────────────────────────────────────────
@@ -103,10 +107,8 @@ class SceneFlow:
     sampled frame). Sparse corners for the ego signals, dense flow for boxes:
 
     ego_mag   median flow magnitude on the road surface → moving / stopped
-    road_dy   downward flow of the asphalt just above the bonnet (fails if the
-              phone sits low: the patch is bonnet / reflection)
     bandN_dy  vertical flow of central points in N row bands, and foe_y the
-              horizon row → ground-plane speed in analyze.py
+              horizon row → road-plane speed in motion.py
     yaw_dx    rotation (turning), as horizontal flow at the image centre. Fit over
               all background points: dx = yaw_dx + yaw_slope · (x − centre)/width.
               Rotation shifts every point equally (intercept); driving forward
@@ -126,23 +128,6 @@ class SceneFlow:
 
     def _median(self, d: np.ndarray, sel: np.ndarray, min_n: int = 4):
         return np.median(d[sel], axis=0) / self.scale if sel.sum() >= min_n else None
-
-    def _road_speed(self, prev: np.ndarray, gray: np.ndarray, sb: list) -> float:
-        """
-        Metric speed index: downward flow of the asphalt patch just above the
-        bonnet, centre of the lane. That patch is at a fixed distance from the
-        camera (fixed height and tilt), so its flow ∝ speed regardless of the
-        surroundings — unlike whole-scene flow, which depends on how close the
-        buildings are. NaN when a vehicle covers the patch.
-        """
-        y1, y2 = int(self.hood_y - 0.12 * self.h), int(self.hood_y - 0.02 * self.h)
-        x1, x2 = int(0.35 * self.w), int(0.65 * self.w)
-        for bx1, by1, bx2, by2 in sb:
-            if by2 > y1 and bx1 < x2 and bx2 > x1:
-                return np.nan
-        a, b = prev[y1 - 20:y2 + 20, x1:x2], gray[y1 - 20:y2 + 20, x1:x2]
-        flow = cv2.calcOpticalFlowFarneback(a, b, None, 0.5, 3, 21, 3, 5, 1.2, 0)
-        return float(np.median(flow[20:-20, :, 1]) / self.scale)
 
     def _box_motion(self, prev: np.ndarray, gray: np.ndarray, sb: list) -> list:
         """
@@ -184,7 +169,7 @@ class SceneFlow:
 
     def update(self, frame: np.ndarray, boxes: list[tuple[int, int, int, int]]):
         gray = cv2.cvtColor(cv2.resize(frame, (self.w, self.h)), cv2.COLOR_BGR2GRAY)
-        ego = dict(ego_mag=np.nan, yaw_dx=np.nan, yaw_slope=np.nan, road_dy=np.nan, foe_y=np.nan,
+        ego = dict(ego_mag=np.nan, yaw_dx=np.nan, yaw_slope=np.nan, foe_y=np.nan,
                    **{f"band{i}_dy": np.nan for i in range(N_BANDS)})
         per_box = [None] * len(boxes)
         if self.prev is None:
@@ -220,7 +205,6 @@ class SceneFlow:
             r, slope = robust_line((x[scene] - self.w / 2) / self.w, d[scene, 0])
             ego["yaw_dx"], ego["yaw_slope"] = r / s, slope / s
 
-        ego["road_dy"] = self._road_speed(prev, gray, sb)
         # ground-plane speed: vertical flow of central (lane) points per image row band;
         # analyze.py divides by (row − horizon)² → speed independent of street width
         centre = bg & (x > self.w * 0.3) & (x < self.w * 0.7)
@@ -236,24 +220,9 @@ class SceneFlow:
 
 
 # ── Main pass ─────────────────────────────────────────────────────────────────
-TRACKER = str(Path(__file__).with_name("bytetrack_dashcam.yaml"))
-LIGHT_BGR = {"red": (0, 0, 255), "yellow": (0, 215, 255), "green": (0, 200, 0)}
-
-
-def draw(frame: np.ndarray, rows: list[dict], t: float, ego: dict):
-    for r in rows:
-        color = LIGHT_BGR.get(r["light"], (255, 160, 40))
-        cv2.rectangle(frame, (r["x1"], r["y1"]), (r["x2"], r["y2"]), color, 2)
-        label = f'{r["cls"]} #{r["track_id"]}' + (f' {r["light"]}' if r["light"] else "")
-        cv2.putText(frame, label, (r["x1"], max(r["y1"] - 6, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
-    cv2.putText(frame, f't={t:7.1f}s  ego={ego["ego_mag"]:5.1f}  yaw={ego["yaw_dx"]:+5.1f}',
-                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
-
-
-def run(video: Path, stride: int, start: float, duration: float | None, model_name: str,
-        imgsz: int, conf: float, hood: float, preview: bool, tag: str = "",
-        ego_only: bool = False) -> Path:
+def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float | None = None,
+        imgsz: int = 640, conf: float = 0.1) -> Path:
+    video, stride, hood = drv["video"], drv["stride"], drv["camera"]["hood"]
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise FileNotFoundError(video)
@@ -266,20 +235,13 @@ def run(video: Path, stride: int, start: float, duration: float | None, model_na
     f_end = n_total if duration is None else min(n_total, f_start + int(duration * fps))
     cap.set(cv2.CAP_PROP_POS_FRAMES, f_start)
 
-    out_dir = OUT_ROOT / (video.stem + (f"_{tag}" if tag else ""))
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    out_dir = drv["folder"]
     saved = None
     if ego_only:  # recompute motion only; mask cars with the saved detections
         saved = {f: g for f, g in pd.read_parquet(out_dir / "detections.parquet").groupby("frame")}
-        preview = False
     else:
-        model = YOLO(model_name)
+        model = YOLO(str(MODEL))
     flow = SceneFlow(W, H, hood=hood)
-    writer = None
-    if preview:
-        writer = cv2.VideoWriter(str(out_dir / "preview.mp4"),
-                                 cv2.VideoWriter_fourcc(*"mp4v"), fps / stride, (W, H))
 
     det_rows, ego_rows = [], []
     t0 = time.time()
@@ -329,9 +291,6 @@ def run(video: Path, stride: int, start: float, duration: float | None, model_na
         det_rows.extend(rows)
         ego_rows.append(dict(frame=f, t=t, **ego))
 
-        if writer is not None:
-            draw(frame, rows, t, ego)
-            writer.write(frame)
 
         if len(ego_rows) % 100 == 0:
             done = (f - f_start) / max(f_end - f_start, 1)
@@ -340,8 +299,6 @@ def run(video: Path, stride: int, start: float, duration: float | None, model_na
         f += 1
 
     cap.release()
-    if writer is not None:
-        writer.release()
 
     ego_df = pd.DataFrame(ego_rows)
     ego_df.to_parquet(out_dir / "ego.parquet", index=False)
@@ -350,8 +307,8 @@ def run(video: Path, stride: int, start: float, duration: float | None, model_na
         return out_dir
     det = pd.DataFrame(det_rows)
     det.to_parquet(out_dir / "detections.parquet", index=False)
-    meta = dict(video=str(video), fps=fps, width=W, height=H, stride=stride,
-                start_s=start, end_s=f / fps, model=model_name, imgsz=imgsz, conf=conf,
+    meta = dict(video=str(video.relative_to(ROOT)), fps=fps, width=W, height=H, stride=stride,
+                start_s=start, end_s=f / fps, model=MODEL.name, imgsz=imgsz, conf=conf,
                 hood=hood, tracker=Path(TRACKER).name,
                 n_sampled_frames=len(ego_df), n_detections=len(det),
                 runtime_s=round(time.time() - t0, 1))
@@ -362,23 +319,13 @@ def run(video: Path, stride: int, start: float, duration: float | None, model_na
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("video", type=Path)
-    ap.add_argument("--stride", type=int, default=3, help="process every Nth frame (3 → ~8 fps at 25 fps)")
-    ap.add_argument("--start", type=float, default=0.0, help="start time, seconds")
-    ap.add_argument("--duration", type=float, default=None, help="seconds to process (default: all)")
-    ap.add_argument("--model", default="models/yolo11s.pt",
-                    help="yolo11s: ~2x the oncoming/light recall of yolo11n, 1.45x slower on CPU")
-    ap.add_argument("--imgsz", type=int, default=640)
-    ap.add_argument("--conf", type=float, default=0.1,
-                    help="detector threshold; low on purpose, ByteTrack filters (see bytetrack_dashcam.yaml)")
-    ap.add_argument("--hood", type=float, default=0.15, help="bottom fraction of frame that is dashboard/bonnet")
-    ap.add_argument("--tag", default="", help="suffix for the output folder, to compare runs")
-    ap.add_argument("--preview", action="store_true", help="write annotated preview.mp4")
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
     ap.add_argument("--ego-only", action="store_true",
                     help="recompute ego.parquet only, reusing saved detections (fast)")
+    ap.add_argument("--start", type=float, default=0.0, help="start time, seconds (for quick tests)")
+    ap.add_argument("--duration", type=float, default=None, help="seconds to process (default: all)")
     a = ap.parse_args()
-    run(a.video, a.stride, a.start, a.duration, a.model, a.imgsz, a.conf, a.hood, a.preview, a.tag,
-        a.ego_only)
+    run(drives.load(a.drive), a.ego_only, a.start, a.duration)
 
 
 if __name__ == "__main__":

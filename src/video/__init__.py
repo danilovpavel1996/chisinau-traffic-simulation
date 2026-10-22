@@ -1,7 +1,12 @@
 """
-Dashcam video → traffic observations.
+Dashcam / phone video → traffic data.
 
-detect_track.py  one pass over a video: YOLO detection + ByteTrack tracking,
-                 ego-motion (optical flow) and traffic-light colour
-analyze.py       tracks → per-track manoeuvre labels + per-minute traffic stats
+    perception.py   detection + tracking + optical flow  (one pass over the video)
+    motion.py       the car's own motion: speed, rotation, turns, stops
+    traffic.py      other road users: track labels (oncoming, parked, …), per-minute counts
+    roads.py        OpenStreetMap street graph
+    localize.py     particle-filter map matching of a GPS-less drive
+    viewer/         synced video + map viewer
+    pipeline.py     all steps for one drive
+    drives.py       drive registry (configs/drives.yaml)
 """

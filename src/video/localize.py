@@ -1,5 +1,5 @@
 """
-pf_match.py
+localize.py
 -----------
 Map-matching a GPS-less video with a particle filter on the OSM street graph.
 
@@ -25,11 +25,11 @@ The best final particle is traced back through its ancestors → the route, and
 its position every second.
 
 Usage:
-    .venv-video/bin/python -m src.video.pf_match <drive>     # key in src/config/drives.yaml
+    .venv-video/bin/python -m src.video.localize <drive>     # key in configs/drives.yaml
 
 Output: data/video/processed/<drive>/match.json — per-second trace (lat, lon,
 street, clock, error vs truth), true route, video-only shape, accuracy.
-View it with src/video/viewer.py.
+View it with src.video.viewer.build.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ import osmnx as ox
 import pandas as pd
 
 from src.video import drives
-from src.video.analyze import ego_states
-from src.video.route_match import GRAPH, Roads, video_anchor
+from src.video.motion import ego_states
+from src.video.roads import Roads, load_graph, street_name, wrap
 
 N_PARTICLES = 4000
 STEP_M = 5.0           # resolution of the per-edge lookup tables
@@ -72,10 +72,6 @@ CONTRA_LOGW = -1.0     # entering an edge against its OSM one-way direction
 START_RADIUS = 300     # m around the GPS anchor
 
 
-def wrap(a):
-    return (np.asarray(a) + 180) % 360 - 180
-
-
 # ── Edge tables ───────────────────────────────────────────────────────────────
 class EdgeTable:
     """Flat arrays of every directed edge sampled every STEP_M metres."""
@@ -87,7 +83,7 @@ class EdgeTable:
         lat, lon, brg = [], [], []
         idx = {}
         for u, lst in roads.out.items():
-            for v, k, length, *_r, coords in lst:
+            for v, k, length, coords in lst:
                 c = np.array(coords)
                 seg = np.array([ox.distance.great_circle(*a, *b) for a, b in zip(c, c[1:])])
                 cum = np.concatenate([[0], np.cumsum(seg)])
@@ -116,7 +112,7 @@ class EdgeTable:
 def odometry(folder: Path, hfov: float, t_from: float, t_to: float) -> pd.DataFrame:
     """Per-second video heading (compass sense, + = clockwise) and speed index."""
     meta = json.loads((folder / "meta.json").read_text())
-    e = ego_states(pd.read_parquet(folder / "ego.parquet"), meta["width"], hfov, meta.get("hood", 0.15))
+    e = ego_states(pd.read_parquet(folder / "ego.parquet"), meta["width"], hfov, meta["hood"])
     dt = e.t.diff().fillna(0)
     e["head"] = -(e.yaw_deg_s * dt).cumsum()              # yaw + = left → compass −
     e["dist"] = np.where(e.moving, e.speed_idx.fillna(0) * dt, 0.0)
@@ -261,6 +257,11 @@ def truth_line(G, waypoints) -> list[tuple[float, float]]:
 
 
 def accuracy(trace: pd.DataFrame, truth) -> dict:
+    """
+    Distance of every matched position to the true route (sampled every 5 m →
+    the metric itself has ~2.5 m resolution), and coverage: the share of the
+    true route the match passes within 30 m of.
+    """
     t = np.array(truth)
     # densify truth to ~5 m
     dense = [t[0]]
@@ -279,21 +280,16 @@ def accuracy(trace: pd.DataFrame, truth) -> dict:
                 within_30m=f"{np.mean(d < 30):.0%}", coverage=f"{cover.mean():.0%}", errors=d)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("drive", help="drive key in src/config/drives.yaml")
-    ap.add_argument("--seeds", type=int, default=5, help="independent runs; the most probable one is kept")
-    a = ap.parse_args()
-
-    drv = drives.load(a.drive)
+def run(drv: dict, seeds: int = 5):
+    """Match the drive to the map; keep the most probable of `seeds` runs; write match.json."""
     folder, cam = drv["folder"], drv["camera"]
     t_from, t_to = drv.get("street_window_s", [0, 1e9])
-    lat0, lon0, start = video_anchor(drv["video"])
+    lat0, lon0, start = drives.anchor(drv["video"])
     od = odometry(folder, cam["hfov_deg"], t_from, t_to)
-    G = ox.load_graphml(GRAPH)
+    G = load_graph()
     T = EdgeTable(Roads(G))
     runs = []
-    for seed in range(a.seeds):
+    for seed in range(seeds):
         tr, scale, ev = run_filter(T, od, (lat0, lon0), None, seed)
         runs.append((ev, seed, tr, scale))
         print(f"  seed {seed}: evidence {ev:9.1f}")
@@ -321,7 +317,7 @@ def main():
 
     km = float(np.sum(np.hypot(np.diff(tr.lat) * 111_320,
                                np.diff(tr.lon) * 111_320 * np.cos(np.radians(lat0))))) / 1000
-    out = dict(drive=a.drive, method="particle filter", seed=seed, evidence=round(ev, 1), start_time=start.isoformat(),
+    out = dict(drive=drv["key"], method="particle filter", seed=seed, evidence=round(ev, 1), start_time=start.isoformat(),
                anchor=[lat0, lon0], street_window_s=[t_from, t_to], scale=scale, km=round(km, 2),
                accuracy=stats, truth=[[round(a, 6), round(b, 6)] for a, b in truth] if truth else None,
                dead_reckoning=dr.round(6).values.tolist(),
@@ -330,9 +326,12 @@ def main():
     print(f"matched trajectory {km:.1f} km → {folder / 'match.json'}")
 
 
-def street_name(d: dict) -> str:
-    n = d.get("name", "")
-    return ", ".join(n) if isinstance(n, list) else (str(n) or "(unnamed)")
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
+    ap.add_argument("--seeds", type=int, default=5, help="independent runs; the most probable one is kept")
+    a = ap.parse_args()
+    run(drives.load(a.drive), a.seeds)
 
 
 if __name__ == "__main__":

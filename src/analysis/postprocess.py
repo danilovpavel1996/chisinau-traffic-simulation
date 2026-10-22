@@ -12,7 +12,7 @@ print("=" * 65)
 print("  Chișinău Traffic Simulation — Post-Processing Pipeline")
 print("=" * 65)
 
-BASE    = os.path.dirname(os.path.abspath(__file__))
+BASE    = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 NET     = os.path.join(BASE, 'data/sumo_net/network.net.xml')
 FCD     = os.path.join(BASE, 'data/outputs/fcd_full.xml')
 OUT_DIR = os.path.join(BASE, 'data/outputs')

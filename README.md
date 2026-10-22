@@ -1,164 +1,59 @@
-# Chișinău Traffic Simulation
+# Chișinău Traffic
 
-City-scale traffic simulation of Chișinău, Moldova using SUMO v1.26.0.
-Visualized with deck.gl in a standalone HTML dashboard.
+Modelling Chișinău's traffic to find ways to relieve its congestion — from data,
+not hand-tuned numbers.
 
----
+Two parts:
 
-## 🗺️ What This Is
+| | What | Status |
+|---|---|---|
+| **Simulation** | City-scale SUMO model: 150k trips/day, 265 signalised intersections, deck.gl visualisation | v2, Feb 2026 — demand is a hand-scaled 8-district OD matrix → [docs/simulation.md](docs/simulation.md) |
+| **Video data** | Dashcam / phone videos → route on the map, speeds, stops, traffic lights, surrounding vehicles | in progress, Oct 2026 → [docs/video_pipeline.md](docs/video_pipeline.md) |
 
-A full-day (00:00–24:00) microscopic traffic simulation of Chișinău with:
-- **150,000+ vehicle trips** across 8 districts
-- **265 signalized intersections** with realistic timing
-- **2,763 road segments** with congestion coloring
-- **Morning & evening peak** calibrated against Google Maps ground truth
-- Interactive deck.gl visualization with live stats, congestion layers, traffic lights
+The video pipeline exists to replace the simulation's guessed demand and signal
+timings with measurements crowdsourced from drivers.
 
----
+## Repository layout
 
-## 📊 Calibration Status (Feb 2026)
+```
+configs/
+  scenario.yaml          simulation scenario
+  drives.yaml            recorded drives: video, camera, ground truth
+src/
+  network/ demand/ simulation/ analysis/     SUMO simulation
+  video/
+    perception.py        detection + tracking + optical flow
+    motion.py            the car's own motion: speed, rotation, turns, stops
+    traffic.py           other road users
+    roads.py             OpenStreetMap street graph
+    localize.py          particle-filter map matching
+    viewer/              synced video + map viewer
+    pipeline.py          all steps for one drive
+docs/                    methods, findings, simulation guide
+tests/                   fast unit tests
+notebooks/
+data/                    inputs and outputs (large files gitignored)
+```
 
-Ground truth from Google Maps predicted travel times:
+## Quick start — video
 
-| Corridor | Google Maps 08:00 | Simulation | Status |
-|----------|-------------------|------------|--------|
-| Bd. Ștefan cel Mare | 8.8 km/h | 14 km/h | ⚠️ improving |
-| Calea Ieșilor → Centru | 8.6 km/h | 16 km/h | ⚠️ improving |
-| Botanica → Primărie | 7.1 km/h | ~14 km/h | ⚠️ improving |
-| Muncești → Bd. Ștefan | 12.5 km/h | ~15 km/h | ✅ close |
+Two environments: the simulation runs on any Python ≥3.10; the video pipeline needs
+Python 3.11 (PyTorch on Intel Macs stops at 2.2 / NumPy < 2).
 
-| Version | Vehicles/day | Mean Speed Ratio | Notes |
-|---------|-------------|-----------------|-------|
-| v1 baseline | 50,000 | 0.90 | nearly free flow, unrealistic |
-| v2 calibrated | 150,000 | 0.485 | realistic congestion, 3x demand scale |
-
----
-
-## 🚀 Quick Start — Full Pipeline
-
-### Prerequisites
 ```bash
-pip install sumolib pandas numpy
-# SUMO v1.26.0 must be installed and on PATH
+python3.11 -m venv .venv-video && .venv-video/bin/pip install -r requirements-video.txt
+.venv-video/bin/python -m src.video.roads build          # street graph (once)
 ```
 
-### Step 1 — OSM Network (if not present)
-```bash
-netconvert --osm-files data/osm/chisinau.osm \
-  --output-file data/sumo_net/network.net.xml \
-  --geometry.remove --roundabouts.guess --ramps.guess \
-  --junctions.join --tls.guess-signals --tls.join
-```
+1. Copy the video to `data/video/raw/` and add an entry to `configs/drives.yaml`.
+2. Run the pipeline (perception takes ~2× the video length on a laptop CPU):
+   ```bash
+   .venv-video/bin/python -m src.video.pipeline 2026_10_22_10_21AM
+   ```
+3. Open `data/video/processed/<drive>/viewer.html` in Chrome or Safari.
 
-### Step 2 — Scale & Generate Trips
-```bash
-python3 scale_trips.py        # uses od_matrix_scaled.csv, resamples from original trips
-```
+Tests: `.venv-video/bin/python -m pytest tests -q`
 
-### Step 3 — Route Assignment
-```bash
-duarouter \
-  --net-file data/sumo_net/network.net.xml \
-  --route-files data/demand/trips.trips.xml \
-  --output-file data/demand/trips.rou.xml \
-  --ignore-errors true --no-warnings true --routing-threads 4
-```
+## Quick start — simulation
 
-### Step 4 — Run SUMO Simulation (~25 min)
-```bash
-sumo -c data/outputs/corridor.sumocfg \
-  --fcd-output data/outputs/fcd_full.xml \
-  --fcd-output.geo true \
-  --fcd-output.period 2 \
-  --tripinfo-output data/outputs/tripinfo.xml
-```
-> ⚠️ `--fcd-output.period 2` captures roundabout geometry while keeping file ~3-5GB
-
-### Step 5 — Post-Process
-```bash
-python3 postprocess.py    # FCD → edge_congestion.csv + roads_congestion.geojson
-python3 make_deckgl.py    # FCD → trips_deckgl.json
-```
-
-### Step 6 — View
-```bash
-cd data/outputs && python3 -m http.server 8080
-# Open: http://localhost:8080/chisinau_traffic.html
-```
-
----
-
-## ⚠️ What's Not in This Repo
-
-| File | Size | How to Regenerate |
-|------|------|-------------------|
-| `data/sumo_net/network.net.xml` | ~298MB | Step 1 above |
-| `data/outputs/fcd_full.xml` | ~3-67GB | Step 4 above |
-| `data/outputs/edgedata.xml` | ~53MB | generated by SUMO automatically |
-| `.venv/` | ~361MB | `python3 -m venv .venv && pip install -r requirements.txt` |
-
----
-
-## 📁 Key Files
-
-```
-data/
-  demand/
-    od_matrix.csv              # Original OD matrix (8 districts × 96 time bins)
-    od_matrix_scaled.csv       # 3x scaled — used for calibrated simulation
-    trips.trips.xml            # Generated vehicle trips (150k)
-    trips.rou.xml              # Routed trips (duarouter output, not in repo)
-  outputs/
-    chisinau_traffic.html      # ← Main visualization
-    roads_congestion.geojson   # Road segments with speed ratios + colors
-    edge_congestion.csv        # Per-edge congestion metrics
-    trips_deckgl.json          # Vehicle animation waypoints (morning peak)
-    traffic_lights.json        # TLS positions and phase states
-  sumo_net/
-    network.net.xml            # Full SUMO road network (not in repo)
-
-scale_trips.py                 # Demand scaling + trip generation
-postprocess.py                 # FCD → congestion outputs
-make_deckgl.py                 # FCD → vehicle animation JSON
-```
-
----
-
-## 🗺️ Districts
-
-| District | Trip Templates | Status |
-|----------|---------------|--------|
-| Centru | ✅ | Full coverage |
-| Botanica | ✅ | Full coverage |
-| Buiucani | ✅ | Full coverage |
-| Râșcani | ✅ | Full coverage |
-| Sculeni | ✅ | Full coverage |
-| Ciocana | ⚠️ | Bounding box needs expansion — see TODO |
-| Telecentru | ⚠️ | Bounding box needs expansion — see TODO |
-| Durlești | ⚠️ | Bounding box needs expansion — see TODO |
-
----
-
-## 📋 TODO
-
-### 🔴 High Priority
-- [ ] **Fix district bounding boxes** for Ciocana, Telecentru, Durlești in `scale_trips.py`
-  - Ciocana: `lon 28.870–28.980, lat 46.970–47.060`
-  - Telecentru: `lon 28.800–28.890, lat 46.930–47.010`
-  - Durlești: `lon 28.724–28.830, lat 47.000–47.088`
-- [ ] **Re-run full pipeline** after district fix with `--fcd-output.period 2`
-  - Fixes roundabout car behavior (2s resolution captures circular paths)
-  - Adds ~50k more trips from the 3 missing districts
-
-### 🟡 Medium Priority
-- [ ] **Validate vs Google Maps** — all corridors should be within 1.5x ground truth
-  - If still too fast → scale demand to 4.0x and re-run
-- [ ] **Update visualization header** — currently shows "50,000 vehicles/day" → fix to 150k
-- [ ] **Evening peak visualization** — extend trips_deckgl.json to cover 17:00–20:00
-
-### 🟢 Nice to Have
-- [ ] **Tune signal timing** on top congested intersections:
-  - Bd. Ștefan cel Mare × Str. Pușkin (81% congestion ratio)
-  - Bd. Ștefan cel Mare × Calea Ieșilor (78%)
-- [ ] **Real OD matrix** from mobile/telecom data
-- [ ] **Deploy** visualization to GitHub Pages
+See [docs/simulation.md](docs/simulation.md) (SUMO 1.26, `requirements.txt`).

@@ -1,7 +1,7 @@
 """
-analyze.py
+traffic.py
 ----------
-Turn raw detections/tracks from detect_track.py into traffic measures.
+Other road users, from the detections/tracks of perception.py.
 
 Per track (vehicle seen in ≥3 sampled frames) we compute image-space features
 and label the manoeuvre relative to the ego car (right-hand traffic):
@@ -16,15 +16,14 @@ and label the manoeuvre relative to the ego car (right-hand traffic):
 
 Before labelling, fragments of the same vehicle are stitched into one track and
 bus/truck are merged ("heavy": trolleybuses flip between the two).
-Ego turns are detected from the horizontal flow of distant scenery (turns.csv);
-they are also landmarks for placing a GPS-less video on the map.
 
-Thresholds are heuristic (v0); validate them against the annotated preview.
+Thresholds are heuristic (v0); check them in the viewer's detection overlay.
 
 Usage:
-    .venv-video/bin/python -m src.video.analyze data/video/processed/<video_name>
+    .venv-video/bin/python -m src.video.traffic <drive>
 
-Outputs (same folder): tracks.parquet, per_minute.csv, stops.csv, turns.csv, timeline.png
+Outputs (data/video/processed/<drive>/): tracks.parquet, per_minute.csv,
+stops.csv, turns.csv, timeline.png
 """
 
 from __future__ import annotations
@@ -40,18 +39,15 @@ import numpy as np
 import pandas as pd
 
 from src.analysis.plots import PALETTE, set_style
+from src.video import drives
+from src.video.motion import ego_states, stops, turns
 
 VEHICLES = ["car", "motorcycle", "bus", "truck"]
 CLASS_GROUP = {"car": "car", "motorcycle": "motorcycle", "bus": "heavy", "truck": "heavy"}
 GROW = 0.35      # 1/s, d(log size)/dt above which an object is approaching fast
 SHRINK = -0.25   # 1/s, below which an object is pulling away
 EDGE = 0.03      # fraction of width counted as "touching the frame edge"
-HFOV_DEG = 85    # horizontal field of view; set so the ~90° right turn in the test
-                 # video reads ~90° (uncalibrated otherwise: angles are approximate)
 CROSS_SPEED = 0.08  # frame widths per second of sideways motion to count as crossing
-YAW_TURN = 5.0   # deg/s of sustained rotation (1 s median) above which we are turning;
-                 # junction turns run ~10–25 deg/s, phone-mount shake ~1–5 deg/s
-MIN_TURN = 20    # deg; smaller heading changes are road curves or lane changes
 
 
 def stitch_tracks(v: pd.DataFrame, W: int, max_gap: float = 1.0) -> pd.DataFrame:
@@ -169,130 +165,6 @@ def label_track(r: pd.Series) -> str:
     return "other"
 
 
-def ego_states(ego: pd.DataFrame, W: int, hfov: float = HFOV_DEG, hood: float = 0.15) -> pd.DataFrame:
-    """
-    moving    ego flow above an adaptive threshold (~1 s median)
-    yaw_deg_s rotation rate from distant-scenery flow, + = left turn
-    turning   |1 s median of yaw_deg_s| > YAW_TURN
-    Windows are in seconds, so results don't depend on the sampling stride.
-    """
-    e = ego.copy()
-    dt = float(e.t.diff().median())
-    win = max(3, int(round(1.0 / dt)) | 1)            # odd number of samples ≈ 1 s
-    e["flow_smooth"] = e.ego_mag.rolling(win, center=True, min_periods=1).median()
-    thr = max(0.6, 0.1 * np.nanpercentile(e.flow_smooth, 95))
-    e["moving"] = e.flow_smooth > thr
-    focal = (W / 2) / np.tan(np.radians(hfov / 2))
-    yaw = e.yaw_dx
-    if "yaw_slope" in e and e.moving.sum() > 50:
-        # Phone not aimed exactly along the direction of travel → part of the
-        # forward-motion slope leaks into the intercept. Calibrate that leak over
-        # the drive: rotation is zero-mean, the leak is ∝ slope.
-        mv = e.moving & e.yaw_slope.notna() & e.yaw_dx.notna()
-        c = np.polyfit(e.yaw_slope[mv], e.yaw_dx[mv], 1)[0]
-        yaw = e.yaw_dx - c * e.yaw_slope
-    e["yaw_deg_s"] = (np.degrees(yaw / focal) / dt).fillna(0)
-    # speed index = forward motion only: while turning the road also streams
-    # sideways by ~yaw px/frame, which is rotation, not distance travelled
-    trans = np.sqrt(np.clip(e.ego_mag ** 2 - yaw.fillna(0) ** 2, 0, None))
-    e["flow_smooth"] = trans.rolling(win, center=True, min_periods=1).median()
-    # speed index: asphalt patch above the bonnet (fixed distance → ∝ m/s); where
-    # a car covers it, fall back to scene flow rescaled to the same units
-    e["speed_idx"] = e.flow_smooth
-    if "road_dy" in e and e.road_dy.notna().sum() > 50:
-        road = e.road_dy.clip(lower=0).rolling(win, center=True, min_periods=1).median()
-        both = road.notna() & (e.flow_smooth > 0.5)
-        corr = road[both].corr(e.flow_smooth[both]) if both.sum() > 50 else 0.0
-        # only trust the patch if it tracks the scene motion: when the phone sits
-        # low the patch can be bonnet / windshield reflection and reads ~0
-        if corr > 0.5:
-            ratio = float(np.median(road[both] / e.flow_smooth[both]))
-            e["speed_idx"] = road.fillna(e.flow_smooth * ratio)
-    e["yaw_smooth"] = e.yaw_deg_s.rolling(win, center=True, min_periods=1).median()
-    e["turning"] = e.yaw_smooth.abs() > YAW_TURN
-    ground = ground_speed(e, W, hood=hood)
-    if ground is not None:
-        e["speed_idx"] = ground.rolling(win, center=True, min_periods=1).median().fillna(0)
-    return e
-
-
-def ground_speed(e: pd.DataFrame, W: int, n_bands: int = 8, band_top: float = 0.15,
-                 hood: float = 0.45) -> pd.Series | None:
-    """
-    Speed index from the road plane. For a point on flat road at image row y,
-    vertical flow ≈ v · (y − y_h)² / (f · camera height), with y_h the horizon
-    row. Dividing each band's flow by (y − y_h)² removes the dependence on what
-    the camera looks at (wide boulevard vs narrow street) → ∝ m/s.
-    y_h = median focus-of-expansion row while driving straight.
-    """
-    cols = [f"band{i}_dy" for i in range(n_bands)]
-    if not set(cols) <= set(e.columns) or "foe_y" not in e:
-        return None
-    H = W * 9 / 16
-    straight = e.moving & ~e.turning & e.foe_y.between(0, H)
-    if straight.sum() < 50:
-        return None
-    y_h = float(np.median(e.foe_y[straight]))
-    edges = np.linspace(H * band_top, H * (1 - hood), n_bands + 1)
-    centres = (edges[:-1] + edges[1:]) / 2
-    # usable bands: clearly below the horizon (above it is buildings, not road) and
-    # clearly above the bonnet edge (reflections). Validated on the 2026-10-22 drive:
-    # these give the same metres-per-unit on Mircești and Mihai Viteazul (±8–30 %),
-    # while whole-scene flow is off by 2.3× between the two streets.
-    lo, hi = y_h + 0.08 * H, H * (1 - hood) - 0.05 * H
-    est = [e[c].clip(lower=0) / ((y - y_h) / H) ** 2 for c, y in zip(cols, centres) if lo < y < hi]
-    if not est:
-        return None
-    g = pd.concat(est, axis=1).mean(axis=1)
-    # gaps (a car in front hides the road): scene flow × LOCAL ratio over ~1 min,
-    # which also adapts to how wide the street is
-    dt = float(e.t.diff().median())
-    both = g.notna() & (e.flow_smooth > 0.5)
-    glob = float(np.nanmedian(g[both] / e.flow_smooth[both]))
-    win = int(60 / dt)
-    # a window needs ≥30 % road-visible samples, else its ratio is a handful of
-    # outliers (plain asphalt has no texture: 5:00–5:45 gave 50× phantom speed).
-    # Clamp to 0.5–2.5× the drive-wide ratio: wide vs narrow streets differ ~2.3×.
-    ratio = (g.where(both).rolling(win, center=True, min_periods=int(0.3 * win)).median()
-             / e.flow_smooth.where(both).rolling(win, center=True, min_periods=int(0.3 * win)).median())
-    ratio = ratio.clip(0.5 * glob, 2.5 * glob).fillna(glob)
-    # the road band itself: drop readings far outside what the scene flow allows
-    g = g.where((g <= 4 * glob * e.flow_smooth + 1) | g.isna())
-    print(f"ground speed: horizon at {y_h / H:.0%} of frame height, {len(est)} road band(s), "
-          f"road visible {g.notna().mean():.0%} of the time")
-    return g.fillna(e.flow_smooth * ratio)
-
-
-def turns(e: pd.DataFrame, min_s: float = 1.5, merge_gap: float = 3.0) -> pd.DataFrame:
-    """
-    Ego manoeuvres. Scenery flowing left (yaw < 0) means we turn right.
-    Turning periods closer than `merge_gap` s are one manoeuvre (a roundabout
-    is right-left-right); its angle is the NET heading change ∫ yaw dt, which
-    is what the street map can be compared against. Angles are approximate
-    (scale depends on the assumed field of view).
-    """
-    dt = e.t.diff().fillna(0)
-    seg = (e.turning != e.turning.shift()).cumsum()
-    spans = [(g.t.iat[0], g.t.iat[-1]) for _, g in e[e.turning].groupby(seg[e.turning])]
-    merged = []
-    for a, b in spans:
-        if merged and a - merged[-1][1] <= merge_gap:
-            merged[-1] = (merged[-1][0], b)
-        else:
-            merged.append((a, b))
-    out = []
-    for a, b in merged:
-        g = e[(e.t >= a) & (e.t <= b)]
-        d = b - a
-        angle = float((g.yaw_deg_s * dt[g.index]).sum())
-        if d < min_s or abs(angle) < MIN_TURN:
-            continue
-        out.append(dict(t_start=g.t.iat[0], t_end=g.t.iat[-1], duration_s=round(d, 1),
-                        direction="right" if angle < 0 else "left",
-                        angle_deg_approx=round(abs(angle))))
-    return pd.DataFrame(out)
-
-
 def dominant_light(det: pd.DataFrame) -> pd.DataFrame:
     """Per sampled frame: colour of the largest traffic light with a known colour."""
     tl = det[(det.cls == "traffic_light") & (det.light != "unknown")].copy()
@@ -300,20 +172,6 @@ def dominant_light(det: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["frame", "light"])
     tl["area"] = (tl.x2 - tl.x1) * (tl.y2 - tl.y1)
     return tl.sort_values("area").groupby("frame").tail(1)[["frame", "light"]]
-
-
-def stops(e: pd.DataFrame, min_s: float = 3.0) -> pd.DataFrame:
-    """Contiguous standstill periods of the ego car, with the light seen during them."""
-    seg = (e.moving != e.moving.shift()).cumsum()
-    out = []
-    for _, g in e[~e.moving].groupby(seg[~e.moving]):
-        d = g.t.iat[-1] - g.t.iat[0]
-        if d >= min_s:
-            lights = g.light.dropna()
-            out.append(dict(t_start=g.t.iat[0], t_end=g.t.iat[-1], duration_s=round(d, 1),
-                            light_seen=lights.mode().iat[0] if len(lights) else "none",
-                            cause="signal" if (lights == "red").any() else "congestion_or_other"))
-    return pd.DataFrame(out)
 
 
 def per_minute(tr: pd.DataFrame, det: pd.DataFrame, e: pd.DataFrame) -> pd.DataFrame:
@@ -372,15 +230,15 @@ def plot_timeline(e: pd.DataFrame, tr: pd.DataFrame, out: Path):
     plt.close(fig)
 
 
-def run(folder: Path, hfov: float = HFOV_DEG):
+def run(drv: dict):
+    folder, cam = drv["folder"], drv["camera"]
     meta = json.loads((folder / "meta.json").read_text())
     det = pd.read_parquet(folder / "detections.parquet")
     ego = pd.read_parquet(folder / "ego.parquet")
+    H, hood = meta["height"], cam["hood"]
 
-    e = ego_states(ego, meta["width"], hfov, meta.get("hood", 0.15)).merge(dominant_light(det), on="frame", how="left")
-    tr = track_features(det, meta["width"], meta["height"], meta.get("hood", 0.15),
-                        e.set_index("frame")[["turning", "moving"]])
-    H, hood = meta["height"], meta.get("hood", 0.15)
+    e = ego_states(ego, meta["width"], cam["hfov_deg"], hood).merge(dominant_light(det), on="frame", how="left")
+    tr = track_features(det, meta["width"], H, hood, e.set_index("frame")[["turning", "moving"]])
     det = det[~(det.cls.isin(VEHICLES) & ((det.y1 + det.y2) / 2 >= H * (1 - hood)))]
     e["visible"] = (det[det.cls.isin(VEHICLES)].groupby("frame").size()
                     .reindex(e.frame, fill_value=0).to_numpy())
@@ -412,11 +270,8 @@ def run(folder: Path, hfov: float = HFOV_DEG):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("folder", type=Path)
-    ap.add_argument("--hfov", type=float, default=HFOV_DEG,
-                    help="camera horizontal field of view, degrees (iPhone 1x video ≈ 70)")
-    a = ap.parse_args()
-    run(a.folder, a.hfov)
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
+    run(drives.load(ap.parse_args().drive))
 
 
 if __name__ == "__main__":

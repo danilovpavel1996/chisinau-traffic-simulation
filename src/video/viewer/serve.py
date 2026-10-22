@@ -1,11 +1,11 @@
 """
-serve.py
---------
+viewer/serve.py
+---------------
 Tiny local web server for the drive viewers, with HTTP Range support so the
 video can be seeked (python -m http.server cannot do that).
 
 Usage:
-    .venv-video/bin/python -m src.video.serve [--port 8765]
+    .venv-video/bin/python -m src.video.viewer.serve [--port 8765]
     → http://localhost:8765/<drive>/viewer.html
 """
 
@@ -17,7 +17,9 @@ import re
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = "data/video/processed"
+from src.video.drives import PROCESSED
+
+ROOT = str(PROCESSED)
 
 
 class RangeHandler(SimpleHTTPRequestHandler):
