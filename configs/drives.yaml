@@ -1,7 +1,8 @@
 # Recorded drives and their per-drive settings.
-# Key = video file stem in data/video/raw/; outputs go to data/video/processed/<key>/.
+# Key = drive name (quoted: YAML reads 2026_10_22_18_16 as a number); outputs go to
+# data/video/processed/<key>/.
 
-2026_10_22_10_21AM:
+"2026_10_22_10_21AM":
   video: data/video/raw/2026_10_22_10_21AM.MOV
   description: Home → office (Zity Mall), iPhone 16 Pro Max on the dashboard
   camera:
@@ -19,3 +20,13 @@
       - Strada Henri Coandă
       - Strada Calea Ieșilor        # roundabout, 2nd exit
     end: [47.0397, 28.8036]         # Zity Mall (start = the video's GPS anchor)
+
+"2026_10_22_18_16":
+  video: data/video/raw/2026_10_22_18_16.mp4      # 10 dashcam clips joined (raw/2026_10_22_18_16/)
+  description: Office (Zity Mall) → home, dashcam (front camera), evening / dusk
+  camera:
+    hfov_deg: 120       # typical dashcam wide lens — to be calibrated against the GPS overlay
+    hood: 0.12          # bonnet + overlay strip at the bottom
+  stride: 6
+  overlay:
+    height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth

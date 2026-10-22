@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #6b7480; --line: #e3e6ea;
+    --truth: #3fa34d; --match: #e2433f; --dr: #7b4fb8; --stop: #f0a020; --turn: #2e86ab;
+    --crossing: #c13fd1; --reseed: #111827; --guard: #8a6d3b; --gpscar: #1f9d55;
+    --moving: #9fd4a3; --stopped: #f2b8b5; --red: #d63a35; --signal: #d63a35; --osmcross: #6b7480;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151a; --panel: #1b2027; --text: #e6e9ee; --muted: #9aa3ae; --line: #2c333c;
+      --moving: #2f6b3a; --stopped: #7a3330; --reseed: #e6e9ee;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+  header select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
+                  background: var(--panel); color: var(--text); }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .videowrap { position: relative; background: #000; }
+  video { display: block; width: 100%; max-height: 60vh; }
+  canvas#overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+  #map { height: 100%; min-height: 420px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
+  .stat { padding: 8px 12px; border-right: 1px solid var(--line); min-width: 0; }
+  .stat:last-child { border-right: 0; }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat .v small { font-size: 12px; color: var(--muted); }
+  .controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .controls label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .bottom { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
+  #timeline { width: 100%; height: 150px; display: block; cursor: pointer; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px 8px; color: var(--muted); font-size: 12px; }
+  .sw { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  #events { max-height: 230px; overflow: auto; font-size: 13px; }
+  #events div { padding: 4px 12px; cursor: pointer; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+  #events div:hover, #events div.now { background: color-mix(in srgb, var(--turn) 12%, transparent); }
+  #events .t { color: var(--muted); font-variant-numeric: tabular-nums; width: 62px; flex: none; }
+  .acc { padding: 8px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+  .empty { padding: 40px; color: var(--muted); }
+  @media (max-width: 900px) { main, .bottom { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drive</h1>
+  <select id="drivePick" aria-label="Choose a drive"></select>
+  <span class="sub" id="subtitle"></span>
+</header>
+<main id="main">
+  <section class="card">
+    <div class="videowrap"><video id="video" controls playsinline muted></video><canvas id="overlay"></canvas></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Clock</div><div class="v" id="clock">–</div></div>
+      <div class="stat"><div class="k">Street (matched)</div><div class="v" id="street">–</div></div>
+      <div class="stat"><div class="k">Speed</div><div class="v" id="speed">–</div></div>
+      <div class="stat"><div class="k">Off truth</div><div class="v" id="err">–</div></div>
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="showBoxes" checked> detection boxes</label>
+      <label><input type="checkbox" id="follow" checked> map follows car</label>
+      <label><input type="checkbox" id="showTruth" checked> truth</label>
+      <label><input type="checkbox" id="showDR"> video-only shape</label>
+      <label><input type="checkbox" id="showOSM"> OSM signals &amp; crossings</label>
+      <span>Space play/pause · ←/→ 5 s</span>
+    </div>
+  </section>
+  <section class="card"><div id="map"></div></section>
+  <div class="bottom">
+    <section class="card">
+      <canvas id="timeline"></canvas>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--moving)"></span>moving</span>
+        <span><span class="sw" style="background:var(--stopped)"></span>stopped</span>
+        <span><span class="sw" style="background:var(--turn)"></span>turning</span>
+        <span><span class="sw" style="background:var(--red)"></span>red light</span>
+        <span><span class="sw" style="background:var(--crossing)"></span>crosswalk</span>
+        <span><span class="sw" style="background:var(--guard)"></span>guard rail</span>
+        <span><span class="sw" style="background:var(--match)"></span>speed (est.)</span>
+        <span><span class="sw" style="background:var(--gpscar)"></span>speed (GPS)</span>
+        <span><span class="sw" style="background:var(--muted);opacity:.35"></span>outside street window</span>
+      </div>
+      <div class="acc" id="acc"></div>
+    </section>
+    <section class="card"><div id="events"></div></section>
+  </div>
+</main>
+<script>
+const INDEX = /*__INDEX__*/[];
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ── drive selection: #<drive> in the URL; each drive's data is its own script ──
+const pick = $("drivePick");
+INDEX.forEach(d => { const o = document.createElement("option"); o.value = d.key; o.textContent = d.key; pick.appendChild(o); });
+const current = decodeURIComponent(location.hash.slice(1)) || (INDEX[INDEX.length - 1] || {}).key;
+pick.value = current;
+pick.onchange = () => { location.hash = pick.value; location.reload(); };
+if (!current) { $("main").innerHTML = '<div class="empty">No drives built yet — run python -m src.video.dashboard.build</div>'; }
+else {
+  const s = document.createElement("script");
+  s.src = `processed/${current}/dashboard_data.js`;
+  s.onload = () => start(window.DRIVE);
+  s.onerror = () => { $("main").innerHTML = `<div class="empty">No data for ${current}</div>`; };
+  document.head.appendChild(s);
+}
+
+function start(D) {
+  const fmt = s => D.clock[Math.max(0, Math.min(D.clock.length - 1, Math.floor(s)))];
+  const M = D.match, T = M ? M.trace : null;
+  document.title = "Drive · " + D.key;
+  $("subtitle").textContent = D.description + (D.truth_kind ? ` · truth: ${D.truth_kind}` : "")
+                              + (D.truth_route ? ` (${D.truth_route})` : "");
+  if (M && M.accuracy) {
+    const a = M.accuracy;
+    $("acc").textContent = `Match vs ${D.truth_kind} — median ${a.median_m} m, 90th pct ${a.p90_m} m, within 30 m ${a.within_30m} of the time, covers ${a.coverage} of the route`
+      + (a.time_median_m !== undefined ? ` · at the same moment: median ${a.time_median_m} m, within 50 m ${a.time_within_50m}` : "")
+      + ` · ${M.km} km matched · ${M.method}, seed ${M.seed} (picked by evidence, not by the truth)`;
+  } else if (!M) { $("acc").textContent = "No map match yet for this drive (processing not finished)."; }
+
+  const video = $("video"); video.src = D.video;
+
+  // ── map ──
+  const map = L.map("map");
+  const streets = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "© Esri, OpenStreetMap contributors", maxZoom: 19 }).addTo(map);
+  const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "© Esri", maxZoom: 19 });
+  L.control.layers({ Streets: streets, Satellite: sat }).addTo(map);
+  const truth = D.truth ? L.polyline(D.truth, { color: css("--truth"), weight: 9, opacity: .45 }).addTo(map) : null;
+  const pts = T ? T.lat.map((la, i) => [la, T.lon[i]]) : [];
+  const dr = M && M.dead_reckoning ? L.polyline(M.dead_reckoning, { color: css("--dr"), weight: 2, dashArray: "6 6" }) : null;
+  const full = T ? L.polyline(pts, { color: css("--match"), weight: 3, opacity: .25 }).addTo(map) : null;
+  const done = T ? L.polyline([], { color: css("--match"), weight: 5 }).addTo(map) : null;
+  L.marker(D.anchor, { title: "start (GPS)" }).addTo(map).bindTooltip("start · " + fmt(0));
+  const arrow = c => L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<svg class="car" width="26" height="26" viewBox="-13 -13 26 26"><circle r="11" fill="${c}" stroke="#fff" stroke-width="2"/><path d="M0,-7 L5,4 L0,1 L-5,4 Z" fill="#fff"/></svg>` });
+  const car = T ? L.marker(pts[0], { icon: arrow(css("--match")), zIndexOffset: 1000 }).addTo(map) : null;
+  const gpsCar = D.gps ? L.circleMarker([D.gps.lat[0], D.gps.lon[0]], { radius: 7, color: "#fff", weight: 2,
+    fillColor: css("--gpscar"), fillOpacity: 1 }).addTo(map).bindTooltip("GPS (truth)") : null;
+  map.fitBounds((truth || full || L.polyline([D.anchor])).getBounds(), { padding: [20, 20], maxZoom: 16 });
+
+  const osm = L.layerGroup();
+  if (D.osm) D.osm.lat.forEach((la, i) => L.circleMarker([la, D.osm.lon[i]], { radius: D.osm.kind[i] === "traffic_signals" ? 4 : 3,
+      color: css(D.osm.kind[i] === "traffic_signals" ? "--signal" : "--osmcross"), weight: 1, fillOpacity: .7 })
+      .bindTooltip("OSM " + D.osm.kind[i].replace("_", " ")).addTo(osm));
+  $("showOSM").onchange = e => e.target.checked ? osm.addTo(map) : osm.remove();
+  $("showTruth").onchange = e => truth && (e.target.checked ? truth.addTo(map) : truth.remove());
+  $("showDR").onchange = e => dr && (e.target.checked ? dr.addTo(map) : dr.remove());
+
+  const idxAt = s => { if (!T) return -1; const i = Math.floor(s) - T.video_s[0]; return i < 0 || i >= T.video_s.length ? -1 : i; };
+  const gpsAt = s => { if (!D.gps) return -1; const g = D.gps.s; let lo = 0, hi = g.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (g[m] <= s) lo = m; else hi = m - 1; } return Math.abs(g[lo] - s) < 3 ? lo : -1; };
+  for (const ev of D.events) {
+    const i = idxAt(ev.t), g = gpsAt(ev.t);
+    const where = i >= 0 ? pts[i] : g >= 0 ? [D.gps.lat[g], D.gps.lon[g]] : null;
+    if (!where) continue;
+    L.circleMarker(where, { radius: ev.kind === "stop" ? 6 : 4, color: css("--" + ev.kind), fillOpacity: .9, weight: 1 })
+      .addTo(map).bindTooltip(fmt(ev.t) + " · " + ev.text).on("click", () => seek(ev.t));
+  }
+  if (full) full.on("click", e => { let b = 0, bd = Infinity;
+    pts.forEach((p, i) => { const d = map.distance(p, e.latlng); if (d < bd) { bd = d; b = i; } }); seek(T.video_s[b]); });
+  if (truth && D.gps) truth.on("click", e => { let b = 0, bd = Infinity;
+    D.gps.lat.forEach((la, i) => { const d = map.distance([la, D.gps.lon[i]], e.latlng); if (d < bd) { bd = d; b = i; } }); seek(D.gps.s[b]); });
+
+  // ── events list ──
+  D.events.forEach(ev => { const row = document.createElement("div");
+    row.innerHTML = `<span class="t">${fmt(ev.t)}</span><span style="color:${css("--" + ev.kind)}">●</span><span>${ev.text}</span>`;
+    row.onclick = () => seek(ev.t); ev.row = row; $("events").appendChild(row); });
+
+  // ── timeline: strips + speed ──
+  const tl = $("timeline"), tc = tl.getContext("2d");
+  const estSpeed = T ? T.speed_kmh : null;
+  const vmax = Math.max(60, ...(D.gps ? D.gps.speed : [0]), ...(estSpeed || [0]));
+  function drawTimeline(t) {
+    const w = tl.clientWidth, h = tl.clientHeight, dpr = devicePixelRatio || 1;
+    if (tl.width !== w * dpr) { tl.width = w * dpr; tl.height = h * dpr; }
+    tc.setTransform(dpr, 0, 0, dpr, 0, 0); tc.clearRect(0, 0, w, h);
+    const x = s => s / D.duration * w, bw = Math.max(1, x(1)), rows = { state: 6, turn: 26, red: 34, cross: 42, guard: 50, speed: 60 };
+    if (D.states) D.states.s.forEach((s, i) => {
+      tc.fillStyle = D.states.moving[i] ? css("--moving") : css("--stopped"); tc.fillRect(x(s), rows.state, bw, 18);
+      if (D.states.turning[i]) { tc.fillStyle = css("--turn"); tc.fillRect(x(s), rows.turn, bw, 6); }
+      if (D.states.red[i]) { tc.fillStyle = css("--red"); tc.fillRect(x(s), rows.red, bw, 6); }
+    });
+    if (D.scene) D.scene.t.forEach((s, i) => {
+      if (D.scene.crosswalk[i] > 0.003) { tc.fillStyle = css("--crossing"); tc.fillRect(x(s) - 1, rows.cross, Math.max(2, x(2)), 6); }
+      if (D.scene.guard_rail[i] > 0.04) { tc.fillStyle = css("--guard"); tc.fillRect(x(s) - 1, rows.guard, Math.max(2, x(2)), 6); }
+    });
+    const [w0, w1] = D.street_window_s; tc.fillStyle = css("--muted"); tc.globalAlpha = .3;
+    tc.fillRect(0, rows.state, x(w0), 50); tc.fillRect(x(w1), rows.state, w - x(w1), 50); tc.globalAlpha = 1;
+    const sy = v => rows.speed + 66 - v / vmax * 62;            // speed chart, 0..vmax km/h
+    tc.strokeStyle = css("--line"); tc.beginPath(); tc.moveTo(0, sy(0)); tc.lineTo(w, sy(0)); tc.stroke();
+    const line = (xs, ys, color) => { tc.strokeStyle = color; tc.lineWidth = 1.5; tc.beginPath();
+      xs.forEach((s, i) => (i ? tc.lineTo : tc.moveTo).call(tc, x(s), sy(ys[i]))); tc.stroke(); tc.lineWidth = 1; };
+    if (D.gps) line(D.gps.s, D.gps.speed, css("--gpscar"));
+    if (T) line(T.video_s, estSpeed, css("--match"));
+    tc.fillStyle = css("--muted"); tc.font = "11px sans-serif";
+    tc.fillText(`${Math.round(vmax)} km/h`, 4, rows.speed + 8);
+    for (let m = 0; m * 60 <= D.duration; m += D.duration > 1200 ? 2 : 1) tc.fillText(fmt(m * 60).slice(0, 5), x(m * 60) + 2, h - 2);
+    tc.fillStyle = css("--text"); tc.fillRect(x(t) - 1, 2, 2, h - 14);
+  }
+  tl.onclick = e => seek(e.offsetX / tl.clientWidth * D.duration);
+
+  // ── detection overlay ──
+  const ov = $("overlay"), oc = ov.getContext("2d");
+  const detT = (D.detections || []).map(f => f[0]);
+  const boxColor = { car: "#4fc3f7", heavy: "#ffb74d", motorcycle: "#ce93d8", light: "#ffffff" };
+  const lightColor = { red: "#ff3b30", yellow: "#ffcc00", green: "#34c759" };
+  function drawOverlay(t) {
+    const r = video.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+    if (ov.width !== r.width * dpr || ov.height !== r.height * dpr) {
+      ov.width = r.width * dpr; ov.height = r.height * dpr; ov.style.width = r.width + "px"; ov.style.height = r.height + "px";
+    }
+    oc.setTransform(dpr, 0, 0, dpr, 0, 0); oc.clearRect(0, 0, r.width, r.height);
+    if (!$("showBoxes").checked || !detT.length || !D.src_size) return;
+    let lo = 0, hi = detT.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (detT[m] <= t) lo = m; else hi = m - 1; }
+    if (Math.abs(detT[lo] - t) > 0.4) return;
+    const [W, H] = D.src_size, sc = Math.min(r.width / W, r.height / H), ox = (r.width - W * sc) / 2, oy = (r.height - H * sc) / 2;
+    oc.lineWidth = 2;
+    for (const [x1, y1, x2, y2, cls, light] of D.detections[lo][1]) {
+      oc.strokeStyle = cls === "light" ? (lightColor[light] || boxColor.light) : boxColor[cls];
+      oc.strokeRect(ox + x1 * sc, oy + y1 * sc, (x2 - x1) * sc, (y2 - y1) * sc);
+    }
+  }
+
+  // ── sync ──
+  function seek(s) { video.currentTime = Math.max(0, Math.min(s, D.duration)); }
+  window.seek = seek;
+  const rotate = (marker, deg) => { const el = marker.getElement(); const svg = el && el.querySelector(".car"); if (svg) svg.style.transform = `rotate(${deg}deg)`; };
+  let last = -2;
+  function update() {
+    const t = video.currentTime, i = idxAt(t), g = gpsAt(t);
+    $("clock").textContent = fmt(t);
+    if (gpsCar && g >= 0) gpsCar.setLatLng([D.gps.lat[g], D.gps.lon[g]]);
+    const gpsKmh = g >= 0 ? Math.round(D.gps.speed[g]) : null;
+    if (i >= 0) {
+      if (i !== last) {
+        done.setLatLngs(pts.slice(0, i + 1)); car.setLatLng(pts[i]); rotate(car, T.bearing[i]);
+        $("street").textContent = T.street[i]; $("street").title = T.street[i];
+        if ($("follow").checked && !map.getBounds().pad(-0.25).contains(pts[i])) map.panTo(pts[i]);
+        last = i;
+      }
+      $("speed").innerHTML = `${T.speed_kmh[i]} km/h` + (gpsKmh !== null ? ` <small>GPS ${gpsKmh}</small>` : "");
+      $("err").textContent = T.error_m ? Math.round(T.error_m[i]) + " m" : "–";
+    } else {
+      $("street").textContent = !T ? "(no match yet)" : t < D.street_window_s[0] ? "(not yet on the street)" : "(parking at destination)";
+      $("speed").innerHTML = gpsKmh !== null ? `<small>GPS</small> ${gpsKmh} km/h` : "–"; $("err").textContent = "–";
+      if (!T && gpsCar && g >= 0 && $("follow").checked && !map.getBounds().pad(-0.25).contains(gpsCar.getLatLng())) map.panTo(gpsCar.getLatLng());
+      last = -1;
+    }
+    let cur = null; for (const ev of D.events) { if (ev.t <= t) cur = ev; ev.row.classList.remove("now"); }
+    if (cur) cur.row.classList.add("now");
+    drawTimeline(t); drawOverlay(t);
+  }
+  (function loop() { update(); requestAnimationFrame(loop); })();
+  document.addEventListener("keydown", e => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+    if (e.code === "Space") { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+    if (e.code === "ArrowRight") seek(video.currentTime + 5);
+    if (e.code === "ArrowLeft") seek(video.currentTime - 5);
+  });
+}
+</script>
+</body>
+</html>

@@ -26,7 +26,7 @@ from src.video.truth import route_from_streets
 def run(drv: dict, seeds: int = 5):
     folder, cam = drv["folder"], drv["camera"]
     t_from, t_to = drv.get("street_window_s", [0, 1e9])
-    lat0, lon0, _ = drives.anchor(drv["video"])
+    lat0, lon0, _ = drives.anchor(drv)
     od = odometry(folder, cam["hfov_deg"], t_from, t_to)
     G = load_graph(); T = EdgeTable(Roads(G))
     truth = route_from_streets(G, (lat0, lon0), drv["truth"]["streets"], tuple(drv["truth"]["end"]))

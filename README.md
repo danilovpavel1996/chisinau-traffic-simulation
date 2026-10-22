@@ -27,7 +27,8 @@ src/
     traffic.py           other road users
     roads.py             OpenStreetMap street graph
     localize.py          particle-filter map matching
-    viewer/              synced video + map viewer
+    overlay.py           dashcam burnt-in GPS → ground truth
+    dashboard/           one page for all drives: synced video + map
     pipeline.py          all steps for one drive
 docs/                    methods, findings, simulation guide
 tests/                   fast unit tests
@@ -52,7 +53,7 @@ python3.11 -m venv .venv-video && .venv-video/bin/pip install -r requirements-vi
    ```bash
    .venv-video/bin/python -m src.video.pipeline 2026_10_22_10_21AM
    ```
-3. Open `data/video/processed/<drive>/viewer.html` in Chrome or Safari.
+3. Open `data/video/dashboard.html` in Chrome or Safari and pick the drive.
 
 Tests: `.venv-video/bin/python -m pytest tests -q`
 

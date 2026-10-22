@@ -29,7 +29,7 @@ Usage:
 
 Output: data/video/processed/<drive>/match.json — per-second trace (lat, lon,
 street, clock, error vs truth), true route, video-only shape, accuracy.
-View it with src.video.viewer.build.
+View it in the dashboard (src.video.dashboard.build).
 """
 
 from __future__ import annotations
@@ -341,6 +341,7 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
     tr = pd.DataFrame(dict(video_s=od.s, lat=lat, lon=lon, edge=path_e))
     for i, conn in sorted(path_jumps):
         stretch(tr, i, conn, dist)
+    tr.attrs["reseeds"] = reseeds
     return tr, float(scale[best]), evidence
 
 
@@ -474,7 +475,7 @@ def run(drv: dict, seeds: int = 10):
     """Match the drive to the map; keep the most probable of `seeds` runs; write match.json."""
     folder, cam = drv["folder"], drv["camera"]
     t_from, t_to = drv.get("street_window_s", [0, 1e9])
-    lat0, lon0, start = drives.anchor(drv["video"])
+    lat0, lon0, start = drives.anchor(drv)
     od = odometry(folder, cam["hfov_deg"], t_from, t_to)
     crossings = crossing_events(folder)
     print(f"{len(crossings)} crosswalk events from the video" if len(crossings) else "no scene.parquet: crosswalks not used")
@@ -487,7 +488,7 @@ def run(drv: dict, seeds: int = 10):
         print(f"  seed {seed}: evidence {ev:9.1f}")
     ev, seed, tr, scale = max(runs, key=lambda r: r[0])
     print(f"kept seed {seed} (highest evidence — chosen without looking at the truth)")
-    tr["clock"] = [(start + timedelta(seconds=int(s))).strftime("%H:%M:%S") for s in tr.video_s]
+    tr["clock"] = drives.clock(drv, tr.video_s).strftime("%H:%M:%S")
     tr["street"] = [street_name(T.roads.data(T.key[e])) for e in tr.edge]
 
     # video-only shape (no map), oriented like the match over its first minute
@@ -499,20 +500,34 @@ def run(drv: dict, seeds: int = 10):
                                     for f in (np.sin, np.cos)])) % 360
     dr = dead_reckoning(od, (lat0, lon0), scale, float(b_vid - b_map))
 
-    truth, stats = None, None
-    if drv.get("truth"):
+    truth, stats, truth_kind = None, None, None
+    gps = drives.gps_track(drv)
+    if gps is not None:                       # dashcam overlay: position at every second
+        truth, truth_kind = list(zip(gps.lat, gps.lon)), "GPS (dashcam overlay)"
+    elif drv.get("truth"):
         t = drv["truth"]
         truth = route_from_streets(G, (lat0, lon0), t["streets"], tuple(t["end"]))
+        truth_kind = "driver's directions"
+    if truth:
         stats = accuracy(tr, truth)
         tr["error_m"] = stats.pop("errors").round(1)
-        print(f"accuracy vs truth: median {stats['median_m']} m, 90th pct {stats['p90_m']} m, "
-              f"within 30 m {stats['within_30m']} of the time, covers {stats['coverage']} of the true route")
+        if gps is not None:                   # same moment in time, not just the same road
+            la = np.interp(tr.video_s, gps.video_s, gps.lat); lo = np.interp(tr.video_s, gps.video_s, gps.lon)
+            d = np.hypot((tr.lat - la) * 111_320, (tr.lon - lo) * 111_320 * np.cos(np.radians(la)))
+            tr["error_m"] = d.round(1)
+            stats.update(time_median_m=round(float(np.median(d))), time_within_50m=f"{np.mean(d < 50):.0%}")
+        print(f"accuracy vs {truth_kind}: median {stats['median_m']} m, 90th pct {stats['p90_m']} m, "
+              f"within 30 m {stats['within_30m']} of the time, covers {stats['coverage']} of the true route"
+              + (f"; at the same moment: median {stats['time_median_m']} m, within 50 m {stats['time_within_50m']}"
+                 if gps is not None else ""))
 
     km = float(np.sum(np.hypot(np.diff(tr.lat) * 111_320,
                                np.diff(tr.lon) * 111_320 * np.cos(np.radians(lat0))))) / 1000
     out = dict(drive=drv["key"], method="particle filter", seed=seed, evidence=round(ev, 1), start_time=start.isoformat(),
                anchor=[lat0, lon0], street_window_s=[t_from, t_to], scale=scale, km=round(km, 2),
-               accuracy=stats, truth=[[round(a, 6), round(b, 6)] for a, b in truth] if truth else None,
+               accuracy=stats, truth_kind=truth_kind,
+               truth=[[round(a, 6), round(b, 6)] for a, b in truth] if truth else None,
+               reseeds=tr.attrs.get("reseeds", []),
                dead_reckoning=dr.round(6).values.tolist(),
                trace=tr.drop(columns="edge").round(6).to_dict(orient="list"))
     (folder / "match.json").write_text(json.dumps(out))

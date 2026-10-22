@@ -13,7 +13,8 @@ to calibrate the city simulation with measurements instead of hand-tuned numbers
 | Own motion: speed, rotation, turns, stops | `src/video/motion.py` | (used by the steps below) |
 | Other vehicles: oncoming / parked / same direction…, counts | `src/video/traffic.py` | `tracks.parquet`, `stops.csv`, `turns.csv`, `per_minute.csv`, `timeline.png` |
 | Map matching (particle filter on OSM) | `src/video/localize.py` | `match.json` |
-| Synced video + map viewer | `src/video/viewer/` | `viewer.html`, `viewer_720p.mp4` |
+| Dashcam overlay OCR (time, speed, GPS → ground truth) | `src/video/overlay.py` | `gps.parquet` |
+| Dashboard of all drives (synced video + map) | `src/video/dashboard/` | `data/video/dashboard.html`, `dashboard_data.js`, `video_720p.mp4` |
 
 Run everything: `.venv-video/bin/python -m src.video.pipeline <drive>`.
 Drives and their settings live in `configs/drives.yaml`.

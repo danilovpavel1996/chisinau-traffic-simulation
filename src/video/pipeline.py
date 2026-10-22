@@ -4,10 +4,11 @@ pipeline.py
 Run every step for one drive, in order:
 
     perception   video → detections.parquet, ego.parquet          (slow: ~2× video length on CPU)
+    overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
     scene        → scene.parquet: crosswalks, lane markings, curbs, guard rails (~20 min)
     localize     → match.json (route on the map, accuracy if the drive has a truth)
-    viewer       → viewer.html (+ 720p copy of the video)
+    dashboard    → data/video/dashboard.html (all drives) + this drive's dashboard_data.js
 
 Usage:
     .venv-video/bin/python -m src.video.pipeline <drive>                    # all steps
@@ -23,11 +24,14 @@ import time
 
 from src.video import drives
 
-STEPS = ["perception", "traffic", "scene", "localize", "viewer"]
+STEPS = ["overlay", "perception", "traffic", "scene", "localize", "dashboard"]
 
 
 def run_step(step: str, drv: dict):
-    if step == "perception":
+    if step == "overlay":
+        from src.video import overlay
+        overlay.run(drv)
+    elif step == "perception":
         from src.video import perception
         perception.run(drv)
     elif step == "traffic":
@@ -39,8 +43,8 @@ def run_step(step: str, drv: dict):
     elif step == "localize":
         from src.video import localize
         localize.run(drv)
-    elif step == "viewer":
-        from src.video.viewer import build
+    elif step == "dashboard":
+        from src.video.dashboard import build
         build.run(drv)
 
 

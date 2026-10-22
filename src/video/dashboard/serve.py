@@ -1,12 +1,12 @@
 """
-viewer/serve.py
----------------
-Tiny local web server for the drive viewers, with HTTP Range support so the
+dashboard/serve.py
+------------------
+Tiny local web server for the dashboard, with HTTP Range support so the
 video can be seeked (python -m http.server cannot do that).
 
 Usage:
-    .venv-video/bin/python -m src.video.viewer.serve [--port 8765]
-    → http://localhost:8765/<drive>/viewer.html
+    .venv-video/bin/python -m src.video.dashboard.serve [--port 8765]
+    → http://localhost:8765/dashboard.html
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 from src.video.drives import PROCESSED
 
-ROOT = str(PROCESSED)
+ROOT = str(PROCESSED.parent)            # data/video: dashboard.html + processed/<drive>/
 
 
 class RangeHandler(SimpleHTTPRequestHandler):

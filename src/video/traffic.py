@@ -17,7 +17,7 @@ and label the manoeuvre relative to the ego car (right-hand traffic):
 Before labelling, fragments of the same vehicle are stitched into one track and
 bus/truck are merged ("heavy": trolleybuses flip between the two).
 
-Thresholds are heuristic (v0); check them in the viewer's detection overlay.
+Thresholds are heuristic (v0); check them in the dashboard's detection overlay.
 
 Usage:
     .venv-video/bin/python -m src.video.traffic <drive>
