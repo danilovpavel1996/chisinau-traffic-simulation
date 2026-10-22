@@ -44,6 +44,7 @@ import osmnx as ox
 import pandas as pd
 
 from src.video import drives
+from src.video.drives import ROOT
 from src.video.motion import ego_states
 from src.video.roads import Roads, load_graph, street_name, wrap
 from src.video.truth import route_from_streets
@@ -59,6 +60,12 @@ WINDOW = 8             # s; heading is compared as CHANGE over this window. Vide
                        # heading must not be trusted, short-term change can be
 SIGMA_DELTA = 20.0     # deg, likelihood width for the windowed heading change
 SIGMA_ABS = 30.0       # deg, absolute heading (with per-particle drift) — pins the street
+TURN_RESEED = 45.0     # deg in WINDOW s: a clear turn; if few hypotheses can follow it…
+RESEED_OK = 0.2        # …(share agreeing within 30°) re-seed RESEED_SHARE of the particles
+RESEED_SHARE = 0.25    # at junctions within RESEED_RADIUS where such a turn is possible
+RESEED_RADIUS = 1500.0 # m (augmented MCL: recovers when all hypotheses drifted to the wrong place)
+RESEED_AFTER = 60      # s into the street window; before that hypotheses still surround the GPS
+                       # start, and leaving a parking lot produces turns no street explains
 RATE_SIGMA = 0.5       # deg/s, prior spread of the heading drift rate
 RATE_WALK = 0.03       # deg/s per √s, drift rate may change (street types differ)
 ALIGN_WALK = 0.4       # deg/√s random walk of the heading offset (drift)
@@ -69,6 +76,9 @@ STOP_SIGMA = 40.0      # m; a stop is most likely within this distance before a 
 STOP_FLOOR = 0.2       # mid-block stops (queues) keep this much likelihood
 V_TYPICAL = 7.0        # m/s; centre of the scale prior
 CONTRA_LOGW = -1.0     # entering an edge against its OSM one-way direction
+SITE_SIGMA = 25.0      # m; a crosswalk under the car is most likely within this of a mapped site
+SITE_FLOOR = 0.15      # OSM misses crossings and the detector misses some → never zero
+FEATURES = ROOT / "data" / "osm" / "junction_features.parquet"   # OSM crossings + signals
 START_RADIUS = 300     # m around the GPS anchor
 
 
@@ -102,6 +112,46 @@ class EdgeTable:
         self.start, self.n = np.array(self.start), np.array(self.n)
         self.lat, self.lon, self.brg = np.array(lat), np.array(lon), np.array(brg)
         self.out = {u: [idx[(u, v, k)] for v, k, *_ in lst] for u, lst in roads.out.items()}
+        self.sites = self._junction_sites()
+        G = roads.G
+        deg = {n: len(set(G.successors(n)) | set(G.predecessors(n))) for n in G.nodes}
+        self.start_junction = np.array([deg.get(u, 0) >= 3 for u, v, k in self.key])
+        self.first_brg = self.brg[self.start]                      # direction leaving the start node
+
+    def _junction_sites(self) -> list[np.ndarray]:
+        """
+        Per edge: offsets (m) of junction-like places — the end/start node if it is
+        a real junction (≥3 streets), plus OSM crossings / traffic signals projected
+        onto the edge (they sit between junctions, which the simplified graph drops).
+        """
+        from scipy.spatial import cKDTree
+        G = self.roads.G
+        deg = {n: len(set(G.successors(n)) | set(G.predecessors(n))) for n in G.nodes}
+        sites = [[] for _ in self.key]
+        for e, (u, v, k) in enumerate(self.key):
+            if deg.get(u, 0) >= 3:
+                sites[e].append(0.0)
+            if deg.get(v, 0) >= 3:
+                sites[e].append(float(self.length[e]))
+        if FEATURES.exists():
+            f = pd.read_parquet(FEATURES)
+            kx = 111_320 * np.cos(np.radians(self.lat.mean()))
+            tree = cKDTree(np.column_stack([self.lat * 111_320, self.lon * kx]))
+            sample_edge = np.repeat(np.arange(len(self.key)), self.n)
+            for la, lo in zip(f.lat, f.lon):
+                for j in tree.query_ball_point([la * 111_320, lo * kx], r=15.0):
+                    e = sample_edge[j]
+                    sites[e].append(float((j - self.start[e]) * STEP_M))
+        return [np.unique(np.round(s)) if s else np.array([]) for s in sites]
+
+    def dist_to_site(self, e: np.ndarray, off: np.ndarray) -> np.ndarray:
+        """Distance (m) from each particle to the nearest junction-like site on its edge."""
+        out = np.full(len(e), np.inf)
+        for i, (ee, oo) in enumerate(zip(e, off)):
+            s = self.sites[ee]
+            if len(s):
+                out[i] = np.min(np.abs(s - oo))
+        return out
 
     def at(self, e: np.ndarray, off: np.ndarray):
         j = self.start[e] + np.minimum((off / STEP_M).astype(int), self.n[e] - 1)
@@ -128,7 +178,25 @@ def odometry(folder: Path, hfov: float, t_from: float, t_to: float) -> pd.DataFr
 
 
 # ── Filter ────────────────────────────────────────────────────────────────────
-def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int = 0):
+def crossing_events(folder: Path, min_gap: float = 4.0) -> np.ndarray:
+    """
+    Video seconds at which the car drives over a crosswalk (segmentation: crosswalk
+    pixels reaching the bottom of the above-bonnet image). Empty without scene.parquet.
+    """
+    f = folder / "scene.parquet"
+    if not f.exists():
+        return np.array([])
+    sc = pd.read_parquet(f).sort_values("t")
+    hits = sc[(sc.crosswalk > 0.003) & (sc.crosswalk_bottom > 0.8)].t.to_numpy()
+    ev = []
+    for t in hits:
+        if not ev or t - ev[-1] > min_gap:
+            ev.append(t)
+    return np.array(ev)
+
+
+def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int = 0,
+               crossings: np.ndarray = np.array([])):
     rng = np.random.default_rng(seed)
     G = T.roads.G
     lat0, lon0 = anchor
@@ -151,6 +219,9 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
     head = od["head"].to_numpy(); dist = od["dist"].to_numpy()
     stopped = (od["moving"] < 0.2).to_numpy()
     stop_start = stopped & ~np.concatenate([[False], stopped[:-1]])
+    crossing_now = np.isin(od.s.to_numpy(), np.floor(crossings).astype(int))
+    moved_s = np.inf             # seconds driven since the last crosswalk that was used
+    reseeds = []                 # (video second, particles re-seeded)
     for i in range(len(od)):
         off = off + scale * dist[i]
         # junction transitions
@@ -181,6 +252,9 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
             d_map = wrap(brg - brg_hist[:, 0])
             r = wrap(d_map - d_video)
             logw += np.where(np.isnan(r), 0.0, -0.5 * (r / SIGMA_DELTA) ** 2)
+            if i >= RESEED_AFTER and abs(d_video) > TURN_RESEED and np.mean(np.abs(np.nan_to_num(r, nan=180)) < 30) < RESEED_OK:
+                n_new = reseed(T, e, off, align, scale, rate, logw, brg_hist, head[i], d_video, rng)
+                reseeds.append((int(od.s.iat[i]), n_new))
         if dist[i] > 0:
             r_abs = wrap((head[i] - align) - brg)
             logw += -0.5 * (r_abs / SIGMA_ABS) ** 2
@@ -188,6 +262,11 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
         excess = np.clip(scale * dist[i] - V_MAX, 0, None)       # soft: by how much, not a flat hit
         logw -= 0.5 * (excess / 5.0) ** 2
         # a new stop: cars stop at junctions / lights (or in a queue behind them)
+        moved_s += dist[i] > 0
+        if crossing_now[i] and moved_s >= 3:                  # driving over a crosswalk right now
+            d = T.dist_to_site(e, off)                        # (once: standing at one re-detects it)
+            logw += np.log(SITE_FLOOR + np.exp(-0.5 * (d / SITE_SIGMA) ** 2))
+            moved_s = 0
         if stop_start[i]:
             to_junction = T.length[e] - off
             logw += np.log(STOP_FLOOR + np.exp(-0.5 * (to_junction / STOP_SIGMA) ** 2))
@@ -211,6 +290,8 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
         d = np.array([ox.distance.great_circle(*end_point, a, b) for a, b in zip(la, lo)])
         logw += -0.5 * (d / 200) ** 2
     evidence += logw.max() + np.log(np.mean(np.exp(logw - logw.max())))
+    if reseeds:
+        print(f"    re-seeded at turns: {', '.join(f'{t // 60}:{t % 60:02d} ({n})' for t, n in reseeds)}")
     best = int(np.argmax(logw))
     # trace back
     path_e, path_off = [], []
@@ -221,6 +302,38 @@ def run_filter(T: EdgeTable, od: pd.DataFrame, anchor, end_point=None, seed: int
     path_e, path_off = np.array(path_e[::-1]), np.array(path_off[::-1])
     lat, lon, _ = T.at(path_e, path_off)
     return pd.DataFrame(dict(video_s=od.s, lat=lat, lon=lon, edge=path_e)), float(scale[best]), evidence
+
+
+def reseed(T: EdgeTable, e, off, align, scale, rate, logw, brg_hist, head_now: float,
+           d_video: float, rng) -> int:
+    """
+    Replace the least likely RESEED_SHARE of particles with hypotheses that have
+    just made the observed turn: on an edge leaving a junction within
+    RESEED_RADIUS of the current estimate, pointing where the video now heads.
+    Arrays are modified in place; returns how many were placed.
+    """
+    w = np.exp(logw - logw.max())
+    la, lo, _ = T.at(e, off)
+    mlat, mlon = np.average(la, weights=w), np.average(lo, weights=w)
+    a_med = float(np.degrees(np.angle(np.average(np.exp(1j * np.radians(align)), weights=w)))) % 360
+    want = (head_now - a_med) % 360
+    kx = 111_320 * np.cos(np.radians(mlat))
+    sl, so = T.lat[T.start], T.lon[T.start]
+    near = np.hypot((sl - mlat) * 111_320, (so - mlon) * kx) < RESEED_RADIUS
+    cand = np.flatnonzero(near & T.start_junction & (np.abs(wrap(T.first_brg - want)) < 35))
+    if not len(cand):
+        return 0
+    k = int(RESEED_SHARE * len(e))
+    worst = np.argsort(logw)[:k]
+    pick = rng.choice(cand, k)
+    e[worst] = pick
+    off[worst] = rng.uniform(0, 15, k)
+    align[worst] = a_med + rng.normal(0, 5, k)
+    rate[worst] = 0.0
+    scale[worst] = rng.choice(scale, k)
+    brg_hist[worst] = (T.first_brg[pick] - d_video)[:, None]       # they just turned by d_video
+    logw[worst] = np.median(logw)
+    return k
 
 
 def systematic(w: np.ndarray, rng) -> np.ndarray:
@@ -270,11 +383,13 @@ def run(drv: dict, seeds: int = 5):
     t_from, t_to = drv.get("street_window_s", [0, 1e9])
     lat0, lon0, start = drives.anchor(drv["video"])
     od = odometry(folder, cam["hfov_deg"], t_from, t_to)
+    crossings = crossing_events(folder)
+    print(f"{len(crossings)} crosswalk events from the video" if len(crossings) else "no scene.parquet: crosswalks not used")
     G = load_graph()
     T = EdgeTable(Roads(G))
     runs = []
     for seed in range(seeds):
-        tr, scale, ev = run_filter(T, od, (lat0, lon0), None, seed)
+        tr, scale, ev = run_filter(T, od, (lat0, lon0), None, seed, crossings)
         runs.append((ev, seed, tr, scale))
         print(f"  seed {seed}: evidence {ev:9.1f}")
     ev, seed, tr, scale = max(runs, key=lambda r: r[0])

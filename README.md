@@ -43,6 +43,8 @@ Python 3.11 (PyTorch on Intel Macs stops at 2.2 / NumPy < 2).
 ```bash
 python3.11 -m venv .venv-video && .venv-video/bin/pip install -r requirements-video.txt
 .venv-video/bin/python -m src.video.roads build          # street graph (once)
+.venv-video/bin/python -m src.video.roads features       # crossings + signals (once, needs data/osm/chisinau_full.osm)
+.venv-video/bin/python -m src.video.scene download-model  # segmentation model (once, 826 MB)
 ```
 
 1. Copy the video to `data/video/raw/` and add an entry to `configs/drives.yaml`.

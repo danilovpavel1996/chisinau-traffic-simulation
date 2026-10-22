@@ -32,6 +32,7 @@ import pandas as pd
 from ultralytics import YOLO
 
 from src.video import drives
+from src.video.compute import limit_cpu, progress
 from src.video.drives import ROOT
 
 # COCO class ids we care about
@@ -223,6 +224,7 @@ class SceneFlow:
 def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float | None = None,
         imgsz: int = 640, conf: float = 0.1) -> Path:
     video, stride, hood = drv["video"], drv["stride"], drv["camera"]["hood"]
+    limit_cpu()
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise FileNotFoundError(video)
@@ -246,6 +248,7 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
     det_rows, ego_rows = [], []
     t0 = time.time()
     f = f_start
+    bar = progress((f_end - f_start + stride - 1) // stride, "perception" + (" (motion only)" if ego_only else ""))
     while f < f_end:
         ok, frame = cap.read()
         if not ok:
@@ -261,8 +264,7 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
             veh = [] if g is None else g[g.cls.isin(VEHICLE_CLASSES)][["x1", "y1", "x2", "y2"]].to_numpy()
             ego, _ = flow.update(frame, [tuple(b) for b in veh])
             ego_rows.append(dict(frame=f, t=t, **ego))
-            if len(ego_rows) % 500 == 0:
-                print(f"  t={t:7.1f}s  {len(ego_rows) / (time.time() - t0):4.1f} frames/s", flush=True)
+            bar.update(1)
             f += 1
             continue
 
@@ -292,12 +294,10 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
         ego_rows.append(dict(frame=f, t=t, **ego))
 
 
-        if len(ego_rows) % 100 == 0:
-            done = (f - f_start) / max(f_end - f_start, 1)
-            print(f"  {done:5.1%}  t={t:7.1f}s  {len(ego_rows) / (time.time() - t0):4.1f} frames/s",
-                  flush=True)
+        bar.update(1)
         f += 1
 
+    bar.close()
     cap.release()
 
     ego_df = pd.DataFrame(ego_rows)

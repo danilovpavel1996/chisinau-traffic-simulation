@@ -5,8 +5,10 @@ Chișinău drivable street graph (OpenStreetMap via osmnx) for map matching.
 
 Usage:
     .venv-video/bin/python -m src.video.roads build      # download / refresh the graph
+    .venv-video/bin/python -m src.video.roads features   # crossings + signals from the full OSM extract
 
-The graph is a cached download (data/osm/chisinau_drive.graphml, gitignored).
+Both outputs are generated and gitignored: data/osm/chisinau_drive.graphml,
+data/osm/junction_features.parquet (from data/osm/chisinau_full.osm).
 """
 
 from __future__ import annotations
@@ -79,11 +81,32 @@ def build():
     print(f"{len(G.nodes)} junctions, {len(G.edges)} road segments → {GRAPH}")
 
 
+def features(osm_file=ROOT / "data" / "osm" / "chisinau_full.osm"):
+    """Pedestrian crossings, traffic signals, stop / give-way nodes (the simplified graph drops most)."""
+    import xml.etree.ElementTree as ET
+    import pandas as pd
+    rows = []
+    for _, el in ET.iterparse(osm_file, events=("end",)):
+        if el.tag == "node":
+            tags = {t.get("k"): t.get("v") for t in el.findall("tag")}
+            hw = tags.get("highway")
+            if hw in ("traffic_signals", "crossing", "stop", "give_way") or ("crossing" in tags and hw is None
+                                                                            and "railway" not in tags):
+                rows.append(dict(osm_id=int(el.get("id")), lat=float(el.get("lat")), lon=float(el.get("lon")),
+                                 kind=hw or "crossing", crossing=tags.get("crossing", "")))
+            el.clear()
+        elif el.tag in ("way", "relation"):
+            el.clear()
+    df = pd.DataFrame(rows)
+    out = ROOT / "data" / "osm" / "junction_features.parquet"
+    df.to_parquet(out, index=False)
+    print(df.kind.value_counts().to_string(), f"\n→ {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["build"])
-    ap.parse_args()
-    build()
+    ap.add_argument("command", choices=["build", "features"])
+    {"build": build, "features": features}[ap.parse_args().command]()
 
 
 if __name__ == "__main__":

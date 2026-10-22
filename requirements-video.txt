@@ -16,3 +16,5 @@ geopandas>=1.0,<1.1
 shapely>=2.0,<2.1
 networkx>=3.0
 pytest>=8
+transformers>=4.40,<4.47   # Mask2Former (scene.py); newer versions want a newer torch
+scipy>=1.11,<1.15

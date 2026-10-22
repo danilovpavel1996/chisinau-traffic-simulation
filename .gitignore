@@ -64,3 +64,4 @@ data/outputs/roads_congestion.geojson
 data/outputs/congestion_map.html
 data/outputs/junction_validation_map.html
 data/outputs/bottleneck_map.html
+data/osm/junction_features.parquet

@@ -85,6 +85,8 @@ def build_data(drv: dict) -> dict:
                     + (" · red light" if r.cause == "signal" else "")) for r in ev_stops.itertuples()]
               + [dict(t=float(r.t_start), kind="turn", text=f"turn {r.direction} ~{r.angle_deg_approx}°")
                  for r in ev_turns.itertuples()])
+    from src.video.localize import crossing_events
+    events += [dict(t=float(t), kind="crossing", text="crosswalk") for t in crossing_events(drv["folder"])]
     events.sort(key=lambda x: x["t"])
 
     return dict(drive=drv["key"], description=drv.get("description", ""), video=PROXY,

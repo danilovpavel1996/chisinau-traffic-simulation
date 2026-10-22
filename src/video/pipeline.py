@@ -5,6 +5,7 @@ Run every step for one drive, in order:
 
     perception   video → detections.parquet, ego.parquet          (slow: ~2× video length on CPU)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
+    scene        → scene.parquet: crosswalks, lane markings, curbs, guard rails (~20 min)
     localize     → match.json (route on the map, accuracy if the drive has a truth)
     viewer       → viewer.html (+ 720p copy of the video)
 
@@ -22,7 +23,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["perception", "traffic", "localize", "viewer"]
+STEPS = ["perception", "traffic", "scene", "localize", "viewer"]
 
 
 def run_step(step: str, drv: dict):
@@ -32,6 +33,9 @@ def run_step(step: str, drv: dict):
     elif step == "traffic":
         from src.video import traffic
         traffic.run(drv)
+    elif step == "scene":
+        from src.video import scene
+        scene.run(drv)
     elif step == "localize":
         from src.video import localize
         localize.run(drv)

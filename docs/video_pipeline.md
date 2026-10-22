@@ -9,6 +9,7 @@ to calibrate the city simulation with measurements instead of hand-tuned numbers
 | Step | Module | Output (`data/video/processed/<drive>/`) |
 |---|---|---|
 | Detection, tracking, optical flow | `src/video/perception.py` | `detections.parquet`, `ego.parquet`, `meta.json` |
+| Street-scene segmentation (Mask2Former, Mapillary Vistas) | `src/video/scene.py` | `scene.parquet` (crosswalks, lane markings, curbs, guard rails, scanlines) |
 | Own motion: speed, rotation, turns, stops | `src/video/motion.py` | (used by the steps below) |
 | Other vehicles: oncoming / parked / same direction…, counts | `src/video/traffic.py` | `tracks.parquet`, `stops.csv`, `turns.csv`, `per_minute.csv`, `timeline.png` |
 | Map matching (particle filter on OSM) | `src/video/localize.py` | `match.json` |
@@ -32,24 +33,36 @@ of the route is reconstructed from the video:
   - absolute heading with a per-hypothesis drift rate (pins the street),
   - stops: a new stop is most likely just before a junction (lights, give-way),
   - implausible speeds (> 90 km/h) — soft penalty,
-  - driving against an OSM one-way — penalty, not forbidden (tags can be wrong).
+  - driving against an OSM one-way — penalty, not forbidden (tags can be wrong),
+  - **driving over a crosswalk** (segmentation): the hypothesis should be within ~25 m of
+    a mapped junction, crossing or signal (OSM features projected onto the graph).
+- **Re-seeding at turns** (augmented MCL): when the video shows a clear turn (>45° in 8 s)
+  that <20 % of hypotheses can follow, the worst 25 % are re-placed at junctions within
+  1.5 km where that turn is possible (not in the first 60 s: parking-lot manoeuvres).
 - 5 independent runs; the one with the highest **evidence** (log marginal likelihood)
   is kept — chosen without looking at the ground truth.
 
 ## Results — drive 2026-10-22 (home → Zity Mall, 5.3 km, 15 min, iPhone)
 
-Ground truth: route confirmed by the driver (Google Maps), see `configs/drives.yaml`.
+Ground truth: the driver's Google Maps directions (street sequence), see `configs/drives.yaml`.
+Rows above the line were measured against an earlier, wrong truth (it continued down
+Mihai Viteazul instead of turning onto Columna) and are not comparable.
 
 | Version | Median error | Within 30 m | Covers true route |
 |---|---|---|---|
 | Turn-event beam search (removed) | — | — | ~40 %, stops early |
 | Particle filter, absolute heading only | 147 m | 44 % | 41 % |
 | + stops near junctions, speed sanity | 2 m | 55–92 % | 40–48 % |
-| + windowed heading, drift-rate state, adaptive scale (current) | **2 m** | **89 %** | **62 %** |
+| + windowed heading, drift-rate state, adaptive scale | 2 m | 89 % | 62 % |
+| *corrected truth (Columna → Henri Coandă → Calea Ieșilor):* | | | |
+| same filter | 2 m | 82 % | 70 % |
+| + crosswalk anchors | 2 m | 82 % | 70 % |
+| + re-seeding at turns (current) | **2 m** | **89 %** | **80 %** |
 
-Median error is at the metric's resolution (true route sampled every 5 m). The match
-follows Mircești → roundabout (correct first exit) → Mihai Viteazul, but undercounts
-distance there and never reaches the final right turn to Calea Ieșilor.
+Median error is at the metric's resolution (true route sampled every 5 m). The match now
+follows the whole route: Mircești → Petricani → roundabout (1st exit) → Mihai Viteazul →
+right turn at 10:32 → Henri Coandă → Calea Ieșilor. Remaining: the campus exit (driveways
+not in the street graph) and the 330 m of Columna (re-seeding jumped to the next junction).
 
 ## Findings log
 
@@ -77,8 +90,15 @@ What was learned, including what did not work — kept so it is not re-tried bli
 9. **Roundabouts** judged edge by edge, and **chains of gentle ramp bends**, produced
    wrong exits in the turn-event matcher; the particle filter handles both by
    comparing heading changes over time.
-10. **OSM one-way tag** on Mitropolit Dosoftei contradicts the driven route → contra-flow
-    allowed at a penalty.
+10. **OSM one-way tag**: contra-flow is allowed at a penalty (map tags can be wrong).
+11. **A self-made ground truth was wrong** (waypoints instead of the driver's directions)
+    → truth is now the street sequence from the directions, validated against the map.
+12. **Crosswalks** (segmentation): 16/16 detected events were real (stripe detector: ~50 %);
+    one crosswalk is re-detected while standing at it → counted once per drive-over.
+    Two crossings on Mircești are missing in OSM (2:21, 3:07 into the video).
+13. **Anchors alone can't fix a 500 m along-track error** on a street with several
+    junctions — the filter snaps to the nearest one. The decisive cue was the turn:
+    re-seeding at turns moved coverage 70 % → 80 %.
 
 ## Next
 

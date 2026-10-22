@@ -9,7 +9,7 @@
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #6b7480; --line: #e3e6ea;
-    --truth: #3fa34d; --match: #e2433f; --dr: #7b4fb8; --stop: #f0a020; --turn: #2e86ab;
+    --truth: #3fa34d; --match: #e2433f; --dr: #7b4fb8; --stop: #f0a020; --turn: #2e86ab; --crossing: #c13fd1;
     --moving: #9fd4a3; --stopped: #f2b8b5; --red: #d63a35;
   }
   @media (prefers-color-scheme: dark) {
@@ -128,7 +128,7 @@ map.fitBounds((truth || full).getBounds(), { padding: [20, 20] });
 const idxAt = s => { const i = Math.floor(s) - T.video_s[0]; return i < 0 || i >= T.video_s.length ? -1 : i; };
 for (const ev of D.events) {
   const i = idxAt(ev.t); if (i < 0) continue;
-  L.circleMarker(pts[i], { radius: ev.kind === "stop" ? 6 : 4, color: css(ev.kind === "stop" ? "--stop" : "--turn"),
+  L.circleMarker(pts[i], { radius: ev.kind === "stop" ? 6 : 4, color: css("--" + ev.kind),
     fillOpacity: .9, weight: 1 }).addTo(map).bindTooltip(fmtClock(ev.t) + " · " + ev.text).on("click", () => seek(ev.t));
 }
 full.on("click", e => {                                // click route → jump video
@@ -143,7 +143,7 @@ $("showDR").onchange = e => e.target.checked ? dr.addTo(map) : dr.remove();
 const evBox = $("events");
 D.events.forEach(ev => {
   const row = document.createElement("div");
-  row.innerHTML = `<span class="t">${fmtClock(ev.t)}</span><span style="color:${css(ev.kind === "stop" ? "--stop" : "--turn")}">●</span><span>${ev.text}</span>`;
+  row.innerHTML = `<span class="t">${fmtClock(ev.t)}</span><span style="color:${css("--" + ev.kind)}">●</span><span>${ev.text}</span>`;
   row.onclick = () => seek(ev.t); ev.row = row; evBox.appendChild(row);
 });
 
