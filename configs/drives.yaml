@@ -10,11 +10,12 @@
   stride: 6             # process every 6th frame (≈5 fps)
   street_window_s: [95, 850]   # before: mounting phone + parking lot; after: parking at the mall
   truth:
-    source: Google Maps route confirmed by the driver (2026-10-22)
-    route: Mircești → roundabout (1st exit) → Mihai Viteazul → Piața D. Cantemir → Calea Ieșilor → Zity Mall
-    waypoints:          # lat, lon — shortest path between consecutive points = true route
-      - [47.0586785, 28.8139849]   # start (iPhone GPS)
-      - [47.04339, 28.83358]       # Petricani / Mihai Viteazul roundabout
-      - [47.03385, 28.81863]       # end of Mihai Viteazul (Bd. Ștefan cel Mare)
-      - [47.03777, 28.81220]       # Piața Dimitrie Cantemir
-      - [47.0397, 28.8036]         # Zity Mall
+    source: Google Maps directions confirmed by the driver (2026-10-22)
+    streets:            # in driving order, as in the directions
+      - Strada Mircești
+      - Strada Petricani
+      - Strada Mihai Viteazul       # roundabout, 1st exit
+      - Strada Columna              # right turn
+      - Strada Henri Coandă
+      - Strada Calea Ieșilor        # roundabout, 2nd exit
+    end: [47.0397, 28.8036]         # Zity Mall (start = the video's GPS anchor)

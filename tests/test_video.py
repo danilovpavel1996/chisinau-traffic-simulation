@@ -99,3 +99,10 @@ def test_registered_drive_loads():
     assert d["camera"]["hood"] == pytest.approx(0.45)
     with pytest.raises(KeyError):
         drives.load("no_such_drive")
+
+
+def test_street_names_match_regardless_of_diacritics():
+    from src.video.truth import norm
+    assert norm("Strada Mirceşti") == norm("Strada Mircești") == "mircesti"
+    assert norm("Strada Henri Coandă") == "henri coanda"
+    assert norm("Strada Columna") != norm("Strada Columna lui Traian")

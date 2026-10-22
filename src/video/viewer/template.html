@@ -28,7 +28,7 @@
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .videowrap { position: relative; background: #000; }
   video { display: block; width: 100%; max-height: 62vh; }
-  canvas#overlay { position: absolute; inset: 0; pointer-events: none; }
+  canvas#overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
   #map { height: 100%; min-height: 420px; }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
   .stat { padding: 8px 12px; border-right: 1px solid var(--line); }
@@ -175,7 +175,10 @@ const boxColor = { car: "#4fc3f7", heavy: "#ffb74d", motorcycle: "#ce93d8", ligh
 const lightColor = { red: "#ff3b30", yellow: "#ffcc00", green: "#34c759" };
 function drawOverlay(t) {
   const r = video.getBoundingClientRect(), dpr = devicePixelRatio || 1;
-  if (ov.width !== r.width * dpr || ov.height !== r.height * dpr) { ov.width = r.width * dpr; ov.height = r.height * dpr; }
+  if (ov.width !== r.width * dpr || ov.height !== r.height * dpr) {   // backing store at device pixels,
+    ov.width = r.width * dpr; ov.height = r.height * dpr;              // displayed at CSS pixels (else 2× on Retina)
+    ov.style.width = r.width + "px"; ov.style.height = r.height + "px";
+  }
   octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, r.width, r.height);
   if (!$("showBoxes").checked || !detT.length) return;
   let lo = 0, hi = detT.length - 1;                      // last frame at or before t

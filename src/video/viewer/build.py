@@ -89,7 +89,7 @@ def build_data(drv: dict) -> dict:
 
     return dict(drive=drv["key"], description=drv.get("description", ""), video=PROXY,
                 src_size=[meta["width"], meta["height"]], duration=float(e.t.max()),
-                truth_route=(drv.get("truth") or {}).get("route", ""), match=match,
+                truth_route=" → ".join(s.removeprefix("Strada ") for s in (drv.get("truth") or {}).get("streets", [])), match=match,
                 states=states, detections=frames, events=events)
 
 

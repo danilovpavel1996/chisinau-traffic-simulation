@@ -39,7 +39,6 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
-import networkx as nx
 import numpy as np
 import osmnx as ox
 import pandas as pd
@@ -47,6 +46,7 @@ import pandas as pd
 from src.video import drives
 from src.video.motion import ego_states
 from src.video.roads import Roads, load_graph, street_name, wrap
+from src.video.truth import route_from_streets
 
 N_PARTICLES = 4000
 STEP_M = 5.0           # resolution of the per-edge lookup tables
@@ -240,22 +240,6 @@ def dead_reckoning(od: pd.DataFrame, anchor, scale: float, align: float) -> pd.D
 
 
 # ── Ground truth + accuracy ───────────────────────────────────────────────────
-def truth_line(G, waypoints) -> list[tuple[float, float]]:
-    nodes = [min(G.nodes, key=lambda n: ox.distance.great_circle(la, lo, G.nodes[n]["y"], G.nodes[n]["x"]))
-             for la, lo in waypoints]
-    pts = []
-    for a, b in zip(nodes, nodes[1:]):
-        path = nx.shortest_path(G, a, b, weight="length")
-        for u, v in zip(path, path[1:]):
-            d = G.edges[u, v, min(G[u][v], key=lambda k: G[u][v][k]["length"])]
-            if "geometry" in d:
-                xs, ys = d["geometry"].xy
-                pts.extend(zip(ys, xs))
-            else:
-                pts.extend([(G.nodes[u]["y"], G.nodes[u]["x"]), (G.nodes[v]["y"], G.nodes[v]["x"])])
-    return pts
-
-
 def accuracy(trace: pd.DataFrame, truth) -> dict:
     """
     Distance of every matched position to the true route (sampled every 5 m →
@@ -309,7 +293,8 @@ def run(drv: dict, seeds: int = 5):
 
     truth, stats = None, None
     if drv.get("truth"):
-        truth = truth_line(G, [tuple(w) for w in drv["truth"]["waypoints"]])
+        t = drv["truth"]
+        truth = route_from_streets(G, (lat0, lon0), t["streets"], tuple(t["end"]))
         stats = accuracy(tr, truth)
         tr["error_m"] = stats.pop("errors").round(1)
         print(f"accuracy vs truth: median {stats['median_m']} m, 90th pct {stats['p90_m']} m, "
