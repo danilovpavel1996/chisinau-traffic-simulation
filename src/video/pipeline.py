@@ -7,7 +7,11 @@ Run every step for one drive, in order:
     overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
     scene        → scene.parquet: crosswalks, lane markings, curbs, guard rails (~20 min)
-    localize     → match.json (route on the map, accuracy if the drive has a truth)
+    localize     → match.json (video-only route on the map, accuracy vs truth / GPS)
+    position     → trace.parquet: where the car is every second (GPS if available, else the match)
+    lanes        → lanes.parquet, lanes_by_street.csv
+    signs        → text.parquet: street names and named places read in the video (no number plates)
+    streets      → stops_detail.csv, streets.csv + data/video/aggregate/ (all drives)
     dashboard    → data/video/dashboard.html (all drives) + this drive's dashboard_data.js
 
 Usage:
@@ -24,7 +28,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "localize", "dashboard"]
+STEPS = ["overlay", "perception", "traffic", "scene", "localize", "position", "lanes", "signs", "streets", "dashboard"]
 
 
 def run_step(step: str, drv: dict):
@@ -43,6 +47,19 @@ def run_step(step: str, drv: dict):
     elif step == "localize":
         from src.video import localize
         localize.run(drv)
+    elif step == "position":
+        from src.video import position
+        position.run(drv)
+    elif step == "lanes":
+        from src.video import lanes
+        lanes.run(drv)
+    elif step == "signs":
+        from src.video import signs
+        signs.run(drv)
+    elif step == "streets":
+        from src.video import street_stats
+        street_stats.run(drv)
+        street_stats.aggregate()
     elif step == "dashboard":
         from src.video.dashboard import build
         build.run(drv)

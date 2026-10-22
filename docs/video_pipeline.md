@@ -16,7 +16,13 @@ to calibrate the city simulation with measurements instead of hand-tuned numbers
 | Dashcam overlay OCR (time, speed, GPS → ground truth) | `src/video/overlay.py` | `gps.parquet` |
 | Dashboard of all drives (synced video + map) | `src/video/dashboard/` | `data/video/dashboard.html`, `dashboard_data.js`, `video_720p.mp4` |
 
+| Position every second (GPS overlay, else video match), snapped to OSM | `src/video/position.py` | `trace.parquet` |
+| Lanes seen / our lane (road scanlines) | `src/video/lanes.py` | `lanes.parquet`, `lanes_by_street.csv` |
+| Street names + named places read in the video (plates dropped) | `src/video/signs.py` | `text.parquet` |
+| Stops, queues before signals, speeds per street; all drives combined | `src/video/street_stats.py` | `stops_detail.csv`, `streets.csv`, `data/video/aggregate/` |
+
 Run everything: `.venv-video/bin/python -m src.video.pipeline <drive>`.
+Segmentation on a free Colab GPU: `python -m src.video.scene <drive> --colab` (~3 min vs ~40 on the laptop).
 Drives and their settings live in `configs/drives.yaml`.
 
 ## Localisation method
@@ -109,3 +115,35 @@ What was learned, including what did not work — kept so it is not re-tried bli
 - **Road / lane segmentation** for metric speed (lane width as a ruler), lane count
   (match to OSM `lanes`) and lane position (turn prior).
 - More drives before further tuning — every threshold here comes from one drive.
+
+## Traffic measures — first results (2026-10-22)
+
+Position from the dashcam's GPS overlay (evening) and from the video match (morning).
+
+**Evening, Zity Mall → home (GPS):** 16 min of the 22-min drive were spent on 1.65 km of
+Calea Ieșilor — median 8 km/h while moving, 62 % of the time standing, 30 stops. The stops
+form one ~1 km queue that took ~13 min (793 s) to clear, headed by the traffic signal at
+Mihai Viteazul × Mitropolit Dosoftei (if Piața D. Cantemir has signals missing in OSM, part
+of it belongs there). Mircești, Petricani and Mihai Viteazul: free flow, 53–56 km/h.
+
+**Morning (video match — speeds approximate):** 56 s waiting 42 m before the signal at the
+end of Mircești; a 25 s red light on Petricani with 4 vehicles ahead.
+
+**Lanes** (road scanlines, max over ~10 s for dashed markings): consistent between drives
+on the same street (Mihai Viteazul 4/4, Calea Ieșilor 3/3 = 3 per direction as in OSM) but
+over-counts narrow streets (parked cars) — a ±1 road-width class, not an exact count.
+
+**Text** (Apple Vision OCR, a frame every 2 s): mostly number plates (now dropped for
+privacy) and shop names. Street-name plates are rarely legible; named places matched
+against OSM POIs are right in 10/16 cases on the GPS drive (within 150 m) — soft evidence.
+
+## Findings log (continued)
+
+14. **Night breaks optical-flow rotation** (dashcam, dusk): 83° false rotation per 30 s on
+    straight roads; vision-only map matching failed completely. Daytime tuning does not
+    transfer — GPS (overlay / phone) is the position source when available; GPS drives are
+    the training data for making vision-only robust later.
+15. **Red-light colour detection works in daylight, not at night** (glare) → queues are
+    attributed to the next signal AHEAD on the driven route instead.
+16. **Colab file API**: uploads > ~30 MB and into missing folders fail (HTTP 500) → 25 MB parts.
+17. **YAML** reads an unquoted 2026_10_22_18_16 as an integer → drive keys are quoted.

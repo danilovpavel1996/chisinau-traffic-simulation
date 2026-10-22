@@ -130,6 +130,36 @@ def build_data(drv: dict) -> dict:
         events.append(dict(t=float(t), kind="reseed", text=f"re-seeded {n} hypotheses at a turn"))
     out["events"] = sorted(events, key=lambda x: x["t"])
 
+    # traffic measures (position.py, street_stats.py, lanes.py, signs.py)
+    if (folder / "trace.parquet").exists():
+        tr = pd.read_parquet(folder / "trace.parquet")
+        tr = tr[tr.in_window]
+        out["speed_trace"] = dict(lat=r6(tr.lat), lon=r6(tr.lon), kmh=r6(tr.speed_kmh), s=tr.video_s.tolist(),
+                                  street=tr.street.tolist(), source=tr.source.iat[0] if len(tr) else "")
+    if (folder / "stops_detail.csv").exists():
+        sd = pd.read_csv(folder / "stops_detail.csv")
+        out["stops"] = sd.replace({np.nan: None}).to_dict(orient="records")
+        for r in sd.itertuples():
+            txt = f"stop {r.duration_s} s · {r.cause}"
+            if pd.notna(r.next_signal_m):
+                txt += f" ({int(r.next_signal_m)} m before signal)"
+            events = [e for e in events if not (e["kind"] == "stop" and abs(e["t"] - r.t_start) < 3)]
+            events.append(dict(t=float(r.t_start), kind="stop", text=txt))
+    agg_sig = ROOT / "data" / "video" / "aggregate" / "signals.csv"
+    if agg_sig.exists():
+        sg = pd.read_csv(agg_sig)
+        sg = sg[sg.drive == drv["key"]].dropna(subset=["lat"])
+        out["signals"] = sg.replace({np.nan: None}).to_dict(orient="records")
+    if (folder / "lanes.parquet").exists():
+        ln = pd.read_parquet(folder / "lanes.parquet").dropna(subset=["lanes"])
+        out["lanes"] = dict(t=r6(ln.t), n=ln.lanes.astype(int).tolist())
+    if (folder / "text.parquet").exists():
+        tx = pd.read_parquet(folder / "text.parquet")
+        tx["what"] = tx.street.fillna(tx.get("place"))
+        tx = tx.dropna(subset=["what"]).drop_duplicates(subset=["what"]).head(80)
+        events += [dict(t=float(r.video_s), kind="text", text=f"read “{r.text}” → {r.what}") for r in tx.itertuples()]
+    out["events"] = sorted(events, key=lambda x: x["t"])
+
     # OSM signals / crossings near the drive
     pts = np.array(out.get("truth") or [[lat0, lon0]])
     if FEATURES.exists():

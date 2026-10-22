@@ -28,6 +28,9 @@ src/
     roads.py             OpenStreetMap street graph
     localize.py          particle-filter map matching
     overlay.py           dashcam burnt-in GPS → ground truth
+    position.py          where the car is every second, on OSM streets
+    lanes.py, signs.py   lanes; street names / named places read in the video
+    street_stats.py      stops, queues before signals, speeds per street (+ all drives)
     dashboard/           one page for all drives: synced video + map
     pipeline.py          all steps for one drive
 docs/                    methods, findings, simulation guide

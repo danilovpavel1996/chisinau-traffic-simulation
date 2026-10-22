@@ -106,3 +106,25 @@ def test_street_names_match_regardless_of_diacritics():
     assert norm("Strada Mirceşti") == norm("Strada Mircești") == "mircesti"
     assert norm("Strada Henri Coandă") == "henri coanda"
     assert norm("Strada Columna") != norm("Strada Columna lui Traian")
+
+
+def test_number_plates_are_dropped_but_street_text_kept():
+    from src.video.signs import is_plate
+    for plate in ("JDZ• 546", "5NRB 449", "HEMH 369", "C AB 123"):
+        assert is_plate(plate), plate
+    for text in ("PETRICANI 86", "rompetrol", "Felicia", "RESTAURANT ITALIAN", "Sens unic"):
+        assert not is_plate(text), text
+
+
+def test_house_number_plate_matches_street():
+    from src.video.signs import match
+    assert match("PETRICANI 86", {"petricani": "Strada Petricani"})[0] == "Strada Petricani"
+
+
+def test_lane_counting_from_a_scanline():
+    from src.video.lanes import frame_lanes
+    # curb | road | marking | road (us, centre 480) | marking | road | curb   on a 960 px row
+    runs = [["curb", 0, 40], ["road", 41, 300], ["lane_marking", 301, 310], ["road", 311, 640],
+            ["lane_marking", 641, 650], ["road", 651, 900], ["curb", 901, 959]]
+    r = frame_lanes(runs, 960)
+    assert r["lanes_visible"] == 3 and r["lane_from_right"] == 2

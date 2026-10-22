@@ -10,7 +10,8 @@
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #6b7480; --line: #e3e6ea;
     --truth: #3fa34d; --match: #e2433f; --dr: #7b4fb8; --stop: #f0a020; --turn: #2e86ab;
-    --crossing: #c13fd1; --reseed: #111827; --guard: #8a6d3b; --gpscar: #1f9d55;
+    --crossing: #c13fd1; --reseed: #111827; --guard: #8a6d3b; --gpscar: #1f9d55; --lane: #5b7fa6;
+    --sp1: #d7301f; --sp2: #fc8d59; --sp3: #fdcc4a; --sp4: #31a354;
     --moving: #9fd4a3; --stopped: #f2b8b5; --red: #d63a35; --signal: #d63a35; --osmcross: #6b7480;
   }
   @media (prefers-color-scheme: dark) {
@@ -73,8 +74,11 @@
       <label><input type="checkbox" id="showBoxes" checked> detection boxes</label>
       <label><input type="checkbox" id="follow" checked> map follows car</label>
       <label><input type="checkbox" id="showTruth" checked> truth</label>
+      <label><input type="checkbox" id="showMatch" checked> video-only match</label>
       <label><input type="checkbox" id="showDR"> video-only shape</label>
       <label><input type="checkbox" id="showOSM"> OSM signals &amp; crossings</label>
+      <label><input type="checkbox" id="showSpeed" checked> speed on map</label>
+      <label><input type="checkbox" id="showStops" checked> stops &amp; signal queues</label>
       <span>Space play/pause · ←/→ 5 s</span>
     </div>
   </section>
@@ -89,6 +93,7 @@
         <span><span class="sw" style="background:var(--red)"></span>red light</span>
         <span><span class="sw" style="background:var(--crossing)"></span>crosswalk</span>
         <span><span class="sw" style="background:var(--guard)"></span>guard rail</span>
+        <span><span class="sw" style="background:var(--lane)"></span>lanes seen</span>
         <span><span class="sw" style="background:var(--match)"></span>speed (est.)</span>
         <span><span class="sw" style="background:var(--gpscar)"></span>speed (GPS)</span>
         <span><span class="sw" style="background:var(--muted);opacity:.35"></span>outside street window</span>
@@ -143,15 +148,46 @@ function start(D) {
   const truth = D.truth ? L.polyline(D.truth, { color: css("--truth"), weight: 9, opacity: .45 }).addTo(map) : null;
   const pts = T ? T.lat.map((la, i) => [la, T.lon[i]]) : [];
   const dr = M && M.dead_reckoning ? L.polyline(M.dead_reckoning, { color: css("--dr"), weight: 2, dashArray: "6 6" }) : null;
-  const full = T ? L.polyline(pts, { color: css("--match"), weight: 3, opacity: .25 }).addTo(map) : null;
-  const done = T ? L.polyline([], { color: css("--match"), weight: 5 }).addTo(map) : null;
+  const full = T ? L.polyline(pts, { color: css("--match"), weight: 3, opacity: .25 }) : null;
+  const done = T ? L.polyline([], { color: css("--match"), weight: 5 }) : null;
   L.marker(D.anchor, { title: "start (GPS)" }).addTo(map).bindTooltip("start · " + fmt(0));
   const arrow = c => L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13],
     html: `<svg class="car" width="26" height="26" viewBox="-13 -13 26 26"><circle r="11" fill="${c}" stroke="#fff" stroke-width="2"/><path d="M0,-7 L5,4 L0,1 L-5,4 Z" fill="#fff"/></svg>` });
-  const car = T ? L.marker(pts[0], { icon: arrow(css("--match")), zIndexOffset: 1000 }).addTo(map) : null;
+  const car = T ? L.marker(pts[0], { icon: arrow(css("--match")), zIndexOffset: 1000 }) : null;
+  // with GPS the video-only match is a test, not the position → hidden by default
+  const matchOn = () => [full, done, car].forEach(l => l && l.addTo(map));
+  const matchOff = () => [full, done, car].forEach(l => l && l.remove());
+  $("showMatch").checked = !D.gps;
+  if (T && !D.gps) matchOn();
+  $("showMatch").onchange = e => e.target.checked ? matchOn() : matchOff();
   const gpsCar = D.gps ? L.circleMarker([D.gps.lat[0], D.gps.lon[0]], { radius: 7, color: "#fff", weight: 2,
     fillColor: css("--gpscar"), fillOpacity: 1 }).addTo(map).bindTooltip("GPS (truth)") : null;
-  map.fitBounds((truth || full || L.polyline([D.anchor])).getBounds(), { padding: [20, 20], maxZoom: 16 });
+  map.fitBounds((truth || (full && L.polyline(pts)) || L.polyline([D.anchor])).getBounds(), { padding: [20, 20], maxZoom: 16 });
+
+  // speed on the map: driven route coloured by measured speed
+  const speedLayer = L.layerGroup();
+  const spColor = v => v < 10 ? css("--sp1") : v < 20 ? css("--sp2") : v < 40 ? css("--sp3") : css("--sp4");
+  if (D.speed_trace) {
+    const S = D.speed_trace;
+    for (let i = 1; i < S.lat.length; i++) {
+      if (S.s[i] - S.s[i - 1] > 2) continue;
+      L.polyline([[S.lat[i - 1], S.lon[i - 1]], [S.lat[i], S.lon[i]]], { color: spColor(S.kmh[i]), weight: 7, opacity: .85 })
+        .bindTooltip(`${S.street[i]} · ${Math.round(S.kmh[i])} km/h (${S.source})`).on("click", () => seek(S.s[i])).addTo(speedLayer);
+    }
+    speedLayer.addTo(map);
+  }
+  $("showSpeed").onchange = e => e.target.checked ? speedLayer.addTo(map) : speedLayer.remove();
+  // stops and the signal each queue was waiting for
+  const stopLayer = L.layerGroup();
+  (D.stops || []).forEach(st => L.circleMarker([st.lat, st.lon], { radius: 4 + Math.min(8, st.duration_s / 8), color: "#fff", weight: 1,
+      fillColor: css("--stop"), fillOpacity: .9 })
+    .bindTooltip(`${st.clock} · stopped ${st.duration_s} s · ${st.cause}` + (st.next_signal_m != null ? `<br>${Math.round(st.next_signal_m)} m before the signal, passed it ${Math.round(st.s_until_signal)} s later` : "")
+      + `<br>${st.vehicles_ahead} vehicle(s) visible ahead in our lane`).on("click", () => seek(st.t_start)).addTo(stopLayer));
+  (D.signals || []).forEach(sg => L.circleMarker([sg.lat, sg.lon], { radius: 9, color: "#fff", weight: 2, fillColor: css("--signal"), fillOpacity: 1 })
+    .bindTooltip(`traffic signal · queue on ${sg.approach}<br>${sg.stops} stops, ${Math.round(sg.standing_s / 60)} min standing<br>queue started ${Math.round(sg.queue_start_m)} m before it`)
+    .addTo(stopLayer));
+  stopLayer.addTo(map);
+  $("showStops").onchange = e => e.target.checked ? stopLayer.addTo(map) : stopLayer.remove();
 
   const osm = L.layerGroup();
   if (D.osm) D.osm.lat.forEach((la, i) => L.circleMarker([la, D.osm.lon[i]], { radius: D.osm.kind[i] === "traffic_signals" ? 4 : 3,
@@ -166,7 +202,7 @@ function start(D) {
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (g[m] <= s) lo = m; else hi = m - 1; } return Math.abs(g[lo] - s) < 3 ? lo : -1; };
   for (const ev of D.events) {
     const i = idxAt(ev.t), g = gpsAt(ev.t);
-    const where = i >= 0 ? pts[i] : g >= 0 ? [D.gps.lat[g], D.gps.lon[g]] : null;
+    const where = g >= 0 ? [D.gps.lat[g], D.gps.lon[g]] : i >= 0 ? pts[i] : null;    // GPS first when we have it
     if (!where) continue;
     L.circleMarker(where, { radius: ev.kind === "stop" ? 6 : 4, color: css("--" + ev.kind), fillOpacity: .9, weight: 1 })
       .addTo(map).bindTooltip(fmt(ev.t) + " · " + ev.text).on("click", () => seek(ev.t));
@@ -184,7 +220,7 @@ function start(D) {
   // ── timeline: strips + speed ──
   const tl = $("timeline"), tc = tl.getContext("2d");
   const estSpeed = T ? T.speed_kmh : null;
-  const vmax = Math.max(60, ...(D.gps ? D.gps.speed : [0]), ...(estSpeed || [0]));
+  const vmax = Math.max(60, ...(D.gps ? D.gps.speed : (estSpeed || [0])));
   function drawTimeline(t) {
     const w = tl.clientWidth, h = tl.clientHeight, dpr = devicePixelRatio || 1;
     if (tl.width !== w * dpr) { tl.width = w * dpr; tl.height = h * dpr; }
@@ -205,8 +241,10 @@ function start(D) {
     tc.strokeStyle = css("--line"); tc.beginPath(); tc.moveTo(0, sy(0)); tc.lineTo(w, sy(0)); tc.stroke();
     const line = (xs, ys, color) => { tc.strokeStyle = color; tc.lineWidth = 1.5; tc.beginPath();
       xs.forEach((s, i) => (i ? tc.lineTo : tc.moveTo).call(tc, x(s), sy(ys[i]))); tc.stroke(); tc.lineWidth = 1; };
+    if (D.lanes) D.lanes.t.forEach((s, i) => { tc.fillStyle = css("--lane");
+      tc.globalAlpha = Math.min(1, D.lanes.n[i] / 5); tc.fillRect(x(s) - 1, rows.guard + 7, Math.max(2, x(2)), 3); tc.globalAlpha = 1; });
     if (D.gps) line(D.gps.s, D.gps.speed, css("--gpscar"));
-    if (T) line(T.video_s, estSpeed, css("--match"));
+    if (T && $("showMatch").checked) line(T.video_s, estSpeed, css("--match"));
     tc.fillStyle = css("--muted"); tc.font = "11px sans-serif";
     tc.fillText(`${Math.round(vmax)} km/h`, 4, rows.speed + 8);
     for (let m = 0; m * 60 <= D.duration; m += D.duration > 1200 ? 2 : 1) tc.fillText(fmt(m * 60).slice(0, 5), x(m * 60) + 2, h - 2);
