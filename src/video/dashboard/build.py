@@ -84,15 +84,27 @@ def build_data(drv: dict) -> dict:
         out["truth_kind"] = "driver's directions"
         out["truth_route"] = " → ".join(s.removeprefix("Strada ") for s in drv["truth"]["streets"])
 
-    # matched route
-    mf = folder / "match.json"
-    if mf.exists():
+    # video-only route: event-based matching (event_match.py) if available, else the particle filter
+    em, mf = folder / "event_match.json", folder / "match.json"
+    if em.exists():
+        e_m = json.loads(em.read_text())
+        tr = pd.DataFrame(e_m["trace"])
+        tr["street"] = ""
+        m = dict(trace=tr.to_dict(orient="list"), method="event-based route matching", seed="-",
+                 km=e_m["route_km"], accuracy=None, reseeds=[], dead_reckoning=None)
+        out["event_eval"] = e_m.get("evaluation", {})
+        out["event_route"] = " → ".join(n.removeprefix("Strada ") for n in e_m["streets"])
+        mf = None
+    if mf is not None and mf.exists():
         m = json.loads(mf.read_text())
+    if em.exists() or (mf is not None and mf.exists()):
         tr = pd.DataFrame(m["trace"])
         kx = 111_320 * np.cos(np.radians(tr.lat.mean()))
         dx, dy = np.gradient(tr.lon) * kx, np.gradient(tr.lat) * 111_320
         tr["speed_kmh"] = pd.Series(np.hypot(dx, dy) * 3.6).rolling(5, center=True, min_periods=1).mean().round(0)
         tr["bearing"] = (np.degrees(np.arctan2(dx, dy)) % 360).round(0)
+        if "street" not in tr:
+            tr["street"] = ""
         keep = [c for c in ("video_s", "lat", "lon", "street", "speed_kmh", "bearing", "error_m") if c in tr]
         out["match"] = dict(trace=tr[keep].to_dict(orient="list"), accuracy=m.get("accuracy"), km=m.get("km"),
                             method=m.get("method"), seed=m.get("seed"), dead_reckoning=m.get("dead_reckoning"),

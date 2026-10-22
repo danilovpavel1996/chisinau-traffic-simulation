@@ -135,6 +135,10 @@ function start(D) {
       + (a.time_median_m !== undefined ? ` · at the same moment: median ${a.time_median_m} m, within 50 m ${a.time_within_50m}` : "")
       + ` · ${M.km} km matched · ${M.method}, seed ${M.seed} (picked by evidence, not by the truth)`;
   } else if (!M) { $("acc").textContent = "No map match yet for this drive (processing not finished)."; }
+  if (D.event_eval) {
+    $("acc").textContent = `Video-only route (event-based, from start + destination): ${D.event_route} · `
+      + Object.entries(D.event_eval).map(([k, v]) => `${k}: ${v}`).join(" · ");
+  }
 
   const video = $("video"); video.src = D.video;
 

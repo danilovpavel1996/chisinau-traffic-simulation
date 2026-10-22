@@ -1,4 +1,5 @@
 # Recorded drives and their per-drive settings.
+# start / destination: the two points an uploader gives (date + time come from the video).
 # Key = drive name (quoted: YAML reads 2026_10_22_18_16 as a number); outputs go to
 # data/video/processed/<key>/.
 
@@ -10,6 +11,8 @@
     hood: 0.45          # bottom fraction of the frame that is bonnet / dashboard
   stride: 6             # process every 6th frame (≈5 fps)
   street_window_s: [95, 850]   # before: mounting phone + parking lot; after: parking at the mall
+  start: [47.0586785, 28.8139849]   # given by the uploader (here: phone GPS at home)
+  destination: [47.0397, 28.8036]   # given by the uploader (Zity Mall)
   truth:
     source: Google Maps directions confirmed by the driver (2026-10-22)
     streets:            # in driving order, as in the directions
@@ -29,5 +32,7 @@
     hood: 0.12          # bonnet + overlay strip at the bottom
   stride: 6
   street_window_s: [50, 1440]  # leaving the Zity Mall lot … arriving home (from the GPS overlay)
+  start: [47.039333, 28.804017]   # as an uploader would give it (= first GPS fix, Zity Mall)
+  destination: [47.058783, 28.813900]   # (= last GPS fix, home)
   overlay:
     height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth

@@ -128,3 +128,19 @@ def test_lane_counting_from_a_scanline():
             ["lane_marking", 641, 650], ["road", 651, 900], ["curb", 901, 959]]
     r = frame_lanes(runs, 960)
     assert r["lanes_visible"] == 3 and r["lane_from_right"] == 2
+
+
+def test_event_alignment_prefers_the_matching_route():
+    import pandas as pd
+    from src.video.event_match import align
+    ev = pd.DataFrame(dict(t=[10.0, 50.0], turn_deg=[90, 0], roundabout=[False, False],
+                           crosswalk=[False, True], signal=[False, False], cues=["turn", "crosswalk"]))
+    def sites(turn):
+        s = pd.DataFrame(dict(d=[100.0, 500.0], node=[1, 2], turn=[turn, 0.0], roundabout=[False, False],
+                              junction=[True, True], signal=[False, False], crossing=[False, True]))
+        s.attrs["length"] = 600.0
+        return s
+    m_ev, total = [100.0, 500.0], 600.0
+    right, _ = align(ev, sites(+88.0), m_ev, total)
+    left, _ = align(ev, sites(-88.0), m_ev, total)
+    assert right < left                      # the route with the right turn explains the video better
