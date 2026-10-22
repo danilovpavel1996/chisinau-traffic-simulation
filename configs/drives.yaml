@@ -28,5 +28,6 @@
     hfov_deg: 120       # typical dashcam wide lens — to be calibrated against the GPS overlay
     hood: 0.12          # bonnet + overlay strip at the bottom
   stride: 6
+  street_window_s: [50, 1440]  # leaving the Zity Mall lot … arriving home (from the GPS overlay)
   overlay:
     height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth

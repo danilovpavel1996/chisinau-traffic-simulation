@@ -1,0 +1,61 @@
+1/5 starting a T4 GPU runtime (first time: sign in to Google when asked)…
+$ colab new -s scene-2026-10-22-18-16 --gpu T4
+[colab] Creating session 'scene-2026-10-22-18-16'...
+[colab] Session READY.
+2/5 uploading 99 MB of frames in 4 parts…
+    part 1/4
+$ colab upload -s scene-2026-10-22-18-16 /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_000 /content/part_000
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_000' to '/content/part_000'
+    part 2/4
+$ colab upload -s scene-2026-10-22-18-16 /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_001 /content/part_001
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_001' to '/content/part_001'
+    part 3/4
+$ colab upload -s scene-2026-10-22-18-16 /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_002 /content/part_002
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_002' to '/content/part_002'
+    part 4/4
+$ colab upload -s scene-2026-10-22-18-16 /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_003 /content/part_003
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/parts/part_003' to '/content/part_003'
+3/5 installing transformers on the VM…
+$ colab install -s scene-2026-10-22-18-16 transformers==4.46.3
+[colab] Installing packages on scene-2026-10-22-18-16 (preferring uv)...
+Installation Complete (via uv)!
+4/5 segmenting on the GPU…
+$ colab exec -s scene-2026-10-22-18-16 -f /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/remote_scene.py
+/usr/local/lib/python3.13/dist-packages/huggingface_hub/utils/_auth.py:104: UserWarning: 
+Error while fetching `HF_TOKEN` secret value from your vault: 'Requesting secret HF_TOKEN timed out. Secrets can only be fetched when running from the Colab UI.'.
+You are not authenticated with the Hugging Face Hub in this notebook.
+If the error persists, please let us know by opening an issue on GitHub (https://github.com/huggingface/huggingface_hub/issues/new).
+  warnings.warn(
+preprocessor_config.json:   0%|          | 0.00/536 [00:00<?, ?B/s]
+/usr/local/lib/python3.13/dist-packages/transformers/utils/deprecation.py:165: UserWarning: The following named arguments are not valid for `Mask2FormerImageProcessor.__init__` and were ignored: '_max_size'
+  return func(*args, **kwargs)
+config.json: 0.00B [00:00, ?B/s]
+model.safetensors:   0%|          | 0.00/866M [00:00<?, ?B/s]
+GPU: Tesla T4 | 887 frames
+  50/887 frames  0.20 s/frame  ~2.8 min left
+  100/887 frames  0.16 s/frame  ~2.1 min left
+  150/887 frames  0.15 s/frame  ~1.8 min left
+  200/887 frames  0.14 s/frame  ~1.6 min left
+  250/887 frames  0.13 s/frame  ~1.4 min left
+  300/887 frames  0.13 s/frame  ~1.3 min left
+  350/887 frames  0.13 s/frame  ~1.2 min left
+  400/887 frames  0.13 s/frame  ~1.0 min left
+  450/887 frames  0.13 s/frame  ~0.9 min left
+  500/887 frames  0.13 s/frame  ~0.8 min left
+  550/887 frames  0.12 s/frame  ~0.7 min left
+  600/887 frames  0.12 s/frame  ~0.6 min left
+  650/887 frames  0.12 s/frame  ~0.5 min left
+  700/887 frames  0.12 s/frame  ~0.4 min left
+  750/887 frames  0.12 s/frame  ~0.3 min left
+  800/887 frames  0.12 s/frame  ~0.2 min left
+  850/887 frames  0.12 s/frame  ~0.1 min left
+  887/887 frames  0.12 s/frame  ~0.0 min left
+done: 887 frames in 107 s
+5/5 downloading the result…
+$ colab download -s scene-2026-10-22-18-16 /content/scene.parquet /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/scene.colab.parquet
+[colab] Downloaded '/content/scene.parquet' to '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/colab/scene.colab.parquet'
+releasing the GPU runtime…
+[colab] Stopping session 'scene-2026-10-22-18-16'...
+[colab] Session terminated.
+→ /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/scene.parquet: 887 frames, crosswalk in 7% of them
+Colab segmentation done in 3.2 min

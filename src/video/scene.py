@@ -14,7 +14,10 @@ from the cheap detectors (traffic lights, stops, turns). ~2 s/frame on a laptop 
 
 Usage:
     .venv-video/bin/python -m src.video.scene download-model   # once, 826 MB
-    .venv-video/bin/python -m src.video.scene <drive>
+    .venv-video/bin/python -m src.video.scene <drive>          # on this Mac (~2.5 s/frame CPU)
+    .venv-video/bin/python -m src.video.scene <drive> --colab   # free Colab T4 via the Colab CLI (~minutes)
+    .venv-video/bin/python -m src.video.scene <drive> --export-colab        # or by hand in the Colab web UI:
+    .venv-video/bin/python -m src.video.scene <drive> --import ~/Downloads/scene.parquet
 
 Output: data/video/processed/<drive>/scene.parquet — one row per analysed frame:
 class shares of the image above the bonnet, crosswalk position (lowest row),
@@ -27,7 +30,9 @@ Model: facebook/mask2former-swin-large-mapillary-vistas-semantic in models/
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import json
+import subprocess
 import time
 
 import cv2
@@ -86,6 +91,24 @@ def runs(row: np.ndarray, names: np.ndarray) -> list[list]:
     return out
 
 
+def crop(frame: np.ndarray, hood: float) -> np.ndarray:
+    """Above-the-bonnet RGB image at inference width (the exact model input)."""
+    img = cv2.cvtColor(frame[: int(frame.shape[0] * (1 - hood + 0.03))], cv2.COLOR_BGR2RGB)
+    return cv2.resize(img, (WIDTH, int(WIDTH * img.shape[0] / img.shape[1])))
+
+
+def describe(seg: np.ndarray, names: np.ndarray, t: float) -> dict:
+    """One analysed frame: class shares, crosswalk position, road scanlines."""
+    h = seg.shape[0]
+    r = dict(t=float(t), width=WIDTH, height=h)
+    for short in set(CLASSES.values()):
+        r[short] = float(np.isin(seg, np.flatnonzero(names == short)).mean())
+    cw_rows = np.flatnonzero((names[seg] == "crosswalk").any(axis=1))
+    r["crosswalk_bottom"] = float(cw_rows.max() / h) if len(cw_rows) else np.nan   # 1.0 = at the bonnet
+    r["scanlines"] = json.dumps({f"{y:.2f}": runs(seg[int(y * h) - 1], names) for y in SCANLINES})
+    return r
+
+
 def run(drv: dict):
     limit_cpu()
     from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
@@ -108,28 +131,203 @@ def run(drv: dict):
         ok, fr = cap.read()
         if not ok:
             continue
-        img = cv2.cvtColor(fr[: int(fr.shape[0] * (1 - hood + 0.03))], cv2.COLOR_BGR2RGB)   # above the bonnet
-        img = cv2.resize(img, (WIDTH, int(WIDTH * img.shape[0] / img.shape[1])))
+        img = crop(fr, hood)
         with torch.no_grad():
             out = model(**proc(images=img, return_tensors="pt"))
         seg = proc.post_process_semantic_segmentation(out, target_sizes=[img.shape[:2]])[0].numpy()
-        h = seg.shape[0]
-        r = dict(t=float(t), width=WIDTH, height=h)
-        for short in set(CLASSES.values()):
-            r[short] = float(np.isin(seg, np.flatnonzero(names == short)).mean())
-        cw_rows = np.flatnonzero((names[seg] == "crosswalk").any(axis=1))
-        r["crosswalk_bottom"] = float(cw_rows.max() / h) if len(cw_rows) else np.nan   # 1.0 = at the bonnet
-        r["scanlines"] = json.dumps({f"{y:.2f}": runs(seg[int(y * h) - 1], names) for y in SCANLINES})
-        rows.append(r)
+        rows.append(describe(seg, names, t))
         bar.update(1)
         if (n + 1) % 20 == 0:                           # checkpoint ≈ every minute
             pd.DataFrame(rows).to_parquet(partial, index=False)
     bar.close()
-    df = pd.DataFrame(rows).sort_values("t")
-    df.to_parquet(out_file, index=False)
+    save(drv, pd.DataFrame(rows), time.time() - t_start)
     partial.unlink(missing_ok=True)
-    print(f"→ {out_file}: {len(df)} frames, crosswalk in {(df.crosswalk > 0.002).mean():.0%} of them, "
-          f"{time.time() - t_start:.0f} s", flush=True)
+
+
+def save(drv: dict, df: pd.DataFrame, seconds: float | None = None):
+    out_file = drv["folder"] / "scene.parquet"
+    df = df.sort_values("t")
+    df.to_parquet(out_file, index=False)
+    print(f"→ {out_file}: {len(df)} frames, crosswalk in {(df.crosswalk > 0.002).mean():.0%} of them"
+          + (f", {seconds:.0f} s" if seconds else ""), flush=True)
+
+
+# ── Google Colab (free GPU) ───────────────────────────────────────────────────
+def export_colab(drv: dict):
+    """
+    Write the model-input frames + a self-contained notebook for Colab:
+    processed/<drive>/colab/{<drive>_frames.zip, scene_colab.ipynb}. The frames are
+    already cropped/resized, so the 3 GB video never leaves this machine.
+    """
+    import inspect
+    import zipfile
+    times = candidate_times(drv)
+    hood = drv["camera"]["hood"]
+    out = drv["folder"] / "colab"
+    out.mkdir(exist_ok=True)
+    zpath = out / f"{drv['key']}_frames.zip"
+    cap = cv2.VideoCapture(str(drv["video"]))
+    bar = progress(len(times), "exporting frames for Colab")
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+        for t in times:
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            ok, fr = cap.read()
+            if ok:
+                ok, buf = cv2.imencode(".jpg", cv2.cvtColor(crop(fr, hood), cv2.COLOR_RGB2BGR),
+                                       [cv2.IMWRITE_JPEG_QUALITY, 92])
+                z.writestr(f"{t:08.1f}.jpg", buf.tobytes())
+            bar.update(1)
+    bar.close()
+    code = "\n\n".join([
+        "import json\nimport numpy as np",
+        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}",
+        inspect.getsource(runs), inspect.getsource(describe)])
+    nb = notebook(drv["key"], zpath.name, code)
+    (out / "scene_colab.ipynb").write_text(json.dumps(nb, indent=1))
+    print(f"→ {zpath} ({zpath.stat().st_size / 1e6:.0f} MB, {len(times)} frames)\n→ {out / 'scene_colab.ipynb'}")
+
+
+def notebook(key: str, zip_name: str, code: str) -> dict:
+    md = lambda src: dict(cell_type="markdown", metadata={}, source=src)
+    py = lambda src: dict(cell_type="code", metadata={}, execution_count=None, outputs=[], source=src)
+    cells = [
+        md(f"# Street-scene segmentation — drive `{key}`\n\n"
+           "1. **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**.\n"
+           f"2. When asked, upload `{zip_name}` (from `data/video/processed/{key}/colab/`).\n"
+           "3. `scene.parquet` downloads at the end — then on the Mac run:\n"
+           f"   `python -m src.video.scene {key} --import ~/Downloads/scene.parquet`"),
+        py("!pip -q install 'transformers==4.46.3'\nimport torch\nprint('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE — switch the runtime to GPU!')"),
+        py(f"from google.colab import files\nimport zipfile, os\nup = files.upload()\n"
+           f"zipfile.ZipFile('{zip_name}').extractall('frames')\nprint(len(os.listdir('frames')), 'frames')"),
+        py(code),
+        py("import os, cv2, pandas as pd, torch\nfrom tqdm.auto import tqdm\n"
+           "from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation\n"
+           "M = 'facebook/mask2former-swin-large-mapillary-vistas-semantic'\n"
+           "proc = AutoImageProcessor.from_pretrained(M)\n"
+           "model = Mask2FormerForUniversalSegmentation.from_pretrained(M).eval().cuda().half()\n"
+           "id2label = model.config.id2label\n"
+           "names = np.array([CLASSES.get(id2label[i], 'other') for i in range(len(id2label))])\n"
+           "rows = []\n"
+           "for f in tqdm(sorted(os.listdir('frames'))):\n"
+           "    img = cv2.cvtColor(cv2.imread('frames/' + f), cv2.COLOR_BGR2RGB)\n"
+           "    inp = {k: v.cuda().half() if v.dtype.is_floating_point else v.cuda() for k, v in proc(images=img, return_tensors='pt').items()}\n"
+           "    with torch.no_grad():\n"
+           "        out = model(**inp)\n"
+           "    out.class_queries_logits = out.class_queries_logits.float(); out.masks_queries_logits = out.masks_queries_logits.float()\n"
+           "    seg = proc.post_process_semantic_segmentation(out, target_sizes=[img.shape[:2]])[0].cpu().numpy()\n"
+           "    rows.append(describe(seg, names, float(f[:-4])))\n"
+           "pd.DataFrame(rows).to_parquet('scene.parquet', index=False)\nprint(len(rows), 'frames done')"),
+        py("files.download('scene.parquet')"),
+    ]
+    return dict(cells=cells, metadata=dict(accelerator="GPU", kernelspec=dict(name="python3", display_name="Python 3"),
+                                           colab=dict(provenance=[])), nbformat=4, nbformat_minor=0)
+
+
+COLAB = ROOT / ".venv-colab" / "bin" / "colab"     # official Google Colab CLI (own venv, Python ≥3.12)
+
+
+def remote_script(code: str) -> str:
+    """Self-contained segmentation job for a Colab GPU VM (frames already uploaded)."""
+    return code + '''
+
+import os, time, zipfile, cv2, pandas as pd, torch
+from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+with open("/content/frames.zip", "wb") as fz:                       # reassemble the uploaded parts
+    for part in sorted(f for f in os.listdir("/content") if f.startswith("part_")):
+        fz.write(open("/content/" + part, "rb").read())
+zipfile.ZipFile("/content/frames.zip").extractall("/content/frames")
+files = sorted(os.listdir("/content/frames"))
+M = "facebook/mask2former-swin-large-mapillary-vistas-semantic"
+proc = AutoImageProcessor.from_pretrained(M)
+model = Mask2FormerForUniversalSegmentation.from_pretrained(M).eval().cuda().half()
+id2label = model.config.id2label
+names = np.array([CLASSES.get(id2label[i], "other") for i in range(len(id2label))])
+print("GPU:", torch.cuda.get_device_name(0), "|", len(files), "frames", flush=True)
+rows, t0 = [], time.time()
+for n, f in enumerate(files):
+    img = cv2.cvtColor(cv2.imread("/content/frames/" + f), cv2.COLOR_BGR2RGB)
+    inp = {k: v.cuda().half() if v.dtype.is_floating_point else v.cuda()
+           for k, v in proc(images=img, return_tensors="pt").items()}
+    with torch.no_grad():
+        out = model(**inp)
+    out.class_queries_logits = out.class_queries_logits.float()
+    out.masks_queries_logits = out.masks_queries_logits.float()
+    seg = proc.post_process_semantic_segmentation(out, target_sizes=[img.shape[:2]])[0].cpu().numpy()
+    rows.append(describe(seg, names, float(f[:-4])))
+    if (n + 1) % 50 == 0 or n + 1 == len(files):
+        el = time.time() - t0
+        print(f"  {n + 1}/{len(files)} frames  {el / (n + 1):.2f} s/frame  ~{el / (n + 1) * (len(files) - n - 1) / 60:.1f} min left", flush=True)
+pd.DataFrame(rows).to_parquet("/content/scene.parquet", index=False)
+print("done:", len(rows), "frames in", round(time.time() - t0), "s", flush=True)
+'''
+
+
+CHUNK_MB = 25          # Colab's file API: 30 MB uploads work, 99 MB → HTTP 500; no sub-folders
+
+
+def split(path: Path, folder: Path, mb: int) -> list[Path]:
+    folder.mkdir(exist_ok=True)
+    for old in folder.glob("part_*"):
+        old.unlink()
+    parts, data = [], path.read_bytes()
+    for i in range(0, len(data), mb * 1_000_000):
+        part = folder / f"part_{i // (mb * 1_000_000):03d}"
+        part.write_bytes(data[i:i + mb * 1_000_000])
+        parts.append(part)
+    return parts
+
+
+def run_colab(drv: dict):
+    """Segment on a free Colab T4 via the Colab CLI: upload frames → run → download → release the GPU."""
+    import inspect
+    import shlex
+    out = drv["folder"] / "colab"
+    zpath = out / f"{drv['key']}_frames.zip"
+    if not zpath.exists():
+        export_colab(drv)
+    code = "\n\n".join([
+        "import json\nimport numpy as np",
+        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}",
+        inspect.getsource(runs), inspect.getsource(describe)])
+    job = out / "remote_scene.py"
+    job.write_text(remote_script(code))
+    result = out / "scene.colab.parquet"
+    session = "scene-" + drv["key"].replace("_", "-").lower()
+
+    def colab(*args):
+        cmd = [str(COLAB), "--auth", "oauth2", *args]
+        print("$ colab " + " ".join(shlex.quote(a) for a in args), flush=True)
+        subprocess.run(cmd, check=True)
+
+    t0 = time.time()
+    try:
+        print("1/5 starting a T4 GPU runtime (first time: sign in to Google when asked)…", flush=True)
+        colab("new", "-s", session, "--gpu", "T4")
+        # Colab's file API rejects large single uploads and missing folders (HTTP 500) → parts in /content
+        parts = split(zpath, out / "parts", CHUNK_MB)
+        print(f"2/5 uploading {zpath.stat().st_size / 1e6:.0f} MB of frames in {len(parts)} parts…", flush=True)
+        for n, part in enumerate(parts, 1):
+            print(f"    part {n}/{len(parts)}", flush=True)
+            colab("upload", "-s", session, str(part), f"/content/{part.name}")
+        print("3/5 installing transformers on the VM…", flush=True)
+        colab("install", "-s", session, "transformers==4.46.3")
+        print("4/5 segmenting on the GPU…", flush=True)
+        colab("exec", "-s", session, "-f", str(job))
+        print("5/5 downloading the result…", flush=True)
+        colab("download", "-s", session, "/content/scene.parquet", str(result))
+    finally:
+        print("releasing the GPU runtime…", flush=True)
+        subprocess.run([str(COLAB), "--auth", "oauth2", "stop", "-s", session])
+    import_colab(drv, result)
+    print(f"Colab segmentation done in {(time.time() - t0) / 60:.1f} min", flush=True)
+
+
+def import_colab(drv: dict, path: Path):
+    df = pd.read_parquet(path)
+    need = {"t", "crosswalk", "crosswalk_bottom", "guard_rail", "scanlines"}
+    if not need <= set(df.columns):
+        raise ValueError(f"{path} is not a scene result (missing {need - set(df.columns)})")
+    save(drv, df)
 
 
 def download_model():
@@ -142,8 +340,21 @@ def download_model():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("drive", help="drive key in configs/drives.yaml, or 'download-model'")
+    ap.add_argument("--export-colab", action="store_true", help="write frames + notebook for Google Colab")
+    ap.add_argument("--import", dest="imp", type=Path, help="scene.parquet downloaded from Colab")
+    ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
     a = ap.parse_args()
-    download_model() if a.drive == "download-model" else run(drives.load(a.drive))
+    if a.drive == "download-model":
+        return download_model()
+    drv = drives.load(a.drive)
+    if a.colab:
+        run_colab(drv)
+    elif a.export_colab:
+        export_colab(drv)
+    elif a.imp:
+        import_colab(drv, a.imp.expanduser())
+    else:
+        run(drv)
 
 
 if __name__ == "__main__":
