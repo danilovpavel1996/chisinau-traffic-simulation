@@ -43,3 +43,13 @@ Thumbs.db
 data/osm/chisinau_full.osm
 data/osm/corridor.osm
 .env
+data/demand/trips.trips.xml.original
+data/demand/trips.trips.xml.backup_47k
+.Rhistory
+
+# Video pipeline (raw video and derived per-frame data stay local)
+.venv-video/
+data/video/
+models/
+data/osm/cache/
+data/osm/chisinau_drive.graphml

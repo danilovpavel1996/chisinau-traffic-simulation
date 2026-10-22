@@ -1,0 +1,9 @@
+# ByteTrack tuned for dashcam footage sampled at ~8–10 fps.
+# Detector runs at conf=0.1 so occluded / distant cars reach the low-score stage.
+tracker_type: bytetrack
+track_high_thresh: 0.3   # first-stage matches
+track_low_thresh: 0.1    # second stage: rescues partially occluded cars
+new_track_thresh: 0.45   # stricter births → fewer short-lived fragment tracks
+track_buffer: 50         # ~6 s at stride 3 / 25 fps: survive occlusion by trolleybuses
+match_thresh: 0.85       # more lenient association (camera moves between samples)
+fuse_score: True
