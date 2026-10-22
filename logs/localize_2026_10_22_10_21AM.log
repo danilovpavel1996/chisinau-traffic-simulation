@@ -1,21 +1,31 @@
 
 ━━ localize ━━
 16 crosswalk events from the video
-    re-seeded at turns: 10:47 (1000), 10:48 (1000)
-  seed 0: evidence    -618.1
     re-seeded at turns: 10:47 (1000)
-  seed 1: evidence    -716.8
+  seed 0: evidence   -1316.8
     re-seeded at turns: 10:47 (1000)
-  seed 2: evidence    -576.5
+  seed 1: evidence    -640.1
     re-seeded at turns: 10:47 (1000)
-  seed 3: evidence    -678.3
+  seed 2: evidence   -1449.6
     re-seeded at turns: 10:47 (1000)
-  seed 4: evidence    -462.3
-kept seed 4 (highest evidence — chosen without looking at the truth)
-accuracy vs truth: median 2 m, 90th pct 36 m, within 30 m 89% of the time, covers 80% of the true route
+  seed 3: evidence   -1589.3
+    re-seeded at turns: 10:47 (0)
+  seed 4: evidence   -1499.5
+    re-seeded at turns: 10:47 (1000)
+  seed 5: evidence   -1369.3
+    re-seeded at turns: 10:47 (1000)
+  seed 6: evidence    -576.3
+    re-seeded at turns: 10:47 (1000)
+  seed 7: evidence    -711.4
+    re-seeded at turns: 10:47 (1000)
+  seed 8: evidence   -1479.9
+    re-seeded at turns: 10:47 (1000)
+  seed 9: evidence    -655.4
+kept seed 6 (highest evidence — chosen without looking at the truth)
+accuracy vs truth: median 2 m, 90th pct 50 m, within 30 m 89% of the time, covers 96% of the true route
 matched trajectory 5.6 km → /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/match.json
-   localize done in 36 s
+   localize done in 51 s
 
 ━━ viewer ━━
 → /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/viewer.html  (0.8 MB)
-   viewer done in 3 s
+   viewer done in 4 s

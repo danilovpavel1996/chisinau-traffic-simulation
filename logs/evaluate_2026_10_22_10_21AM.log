@@ -1,0 +1,24 @@
+evaluating seeds:   0%|          | 0/10 [00:00 elapsed, ? left, ?frame/s]evaluating seeds:  10%|█         | 1/10 [00:06 elapsed, 00:56 left,  6.30s/frame]evaluating seeds:  20%|██        | 2/10 [00:10 elapsed, 00:41 left,  5.20s/frame]evaluating seeds:  30%|███       | 3/10 [00:13 elapsed, 00:31 left,  4.49s/frame]evaluating seeds:  40%|████      | 4/10 [00:17 elapsed, 00:26 left,  4.44s/frame]evaluating seeds:  60%|██████    | 6/10 [00:23 elapsed, 00:15 left,  3.91s/frame]evaluating seeds:  70%|███████   | 7/10 [00:29 elapsed, 00:12 left,  4.11s/frame]evaluating seeds:  80%|████████  | 8/10 [00:32 elapsed, 00:08 left,  4.02s/frame]evaluating seeds:  90%|█████████ | 9/10 [00:37 elapsed, 00:04 left,  4.17s/frame]evaluating seeds: 100%|██████████| 10/10 [00:41 elapsed, 00:00 left,  4.18s/frame]evaluating seeds: 100%|██████████| 10/10 [00:41 elapsed, 00:00 left,  4.19s/frame]
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (0)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+    re-seeded at turns: 10:47 (1000)
+ seed  evidence  median_m within_30m coverage                                                                                                                           route
+    0     -1317       241        44%      46%                             Domniței → Gura Văii → Gura Văii, Strada Ipotești → Ipotești → Mircești → Petricani → Calea Moșilor
+    1      -640         2        80%      70%                                                   Domniței → Gura Văii → Mircești → Petricani → Mihai Viteazul → Alexei Șciusev
+    2     -1450         3        77%      65%                                                                    Domniței → Gura Văii → Mircești → Petricani → Mihai Viteazul
+    3     -1589         3        63%      64%                                                                                Mircești → Ipotești → Petricani → Mihai Viteazul
+    4     -1500         1        88%      18%                                                                                             Vasilie Harea → Domniței → Mircești
+    5     -1369        16        52%      46%                                                                                     Domniței → Gura Văii → Mircești → Petricani
+    6      -576         2        89%      96% Domniței → Gura Văii → Mircești → Petricani → Mihai Viteazul → Columna → Henri Coandă → Piața Dimitrie Cantemir → Calea Ieșilor
+    7      -711      1274         3%       1%                                                  Domniței → Mircești → Șoseaua Balcani - Centura Chișinăului → Calea Ghidighici
+    8     -1480         2        55%      70%                                              Domniței → Gura Văii → Mircești → Petricani → Mihai Viteazul → Mitropolit Dosoftei
+    9      -655         2        69%      74%                                              Domniței → Gura Văii → Mircești → Petricani → Mihai Viteazul → Mitropolit Dosoftei
+
+coverage over 10 runs: median 64 %, worst 1 %, runs ≥ 90 %: 1/10; the kept run (max evidence) = seed 6
