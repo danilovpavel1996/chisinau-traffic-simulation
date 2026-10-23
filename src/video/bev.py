@@ -162,6 +162,11 @@ class Geometry:
         self.fz = c["ground_scale"] / self.h if measured else self.f * self.depth_scale
         self.source = "parked cars + speed overlay" if measured else "map (turns, crosswalks)"
         self.cx = WIDTH / 2
+        # lens distortion measured by GeoCalib (lens.py): x_d = c + (x_u − c)·(1 + k1·r²), r in
+        # units of the focal length; barrel (k1 < 0) squeezes the image edges toward the centre
+        self.k1 = c.get("lens_k1") or 0.0
+        self.fl = c.get("lens_focal_px") or self.fz
+        self.cy = (meta["height"] * (1 - cam["hood"] + 0.03)) * self.k / 2      # centre of the cropped image
         self.bonnet = meta["height"] * (1 - cam["hood"]) * self.k
         self.top, self.step = int(dense_row.top), int(dense_row.step)
         self.shape = json.loads(dense_row.mask_shape)
@@ -175,15 +180,31 @@ class Geometry:
         with np.errstate(divide="ignore", invalid="ignore"):
             y = self.y_h + self.fz * self.h / ZZ
             x = self.cx + XX * (y - self.y_h) / self.h
+            x, y = self.distort(x, y)
         r = np.floor((y - self.top) / self.step).astype(int)
         c = np.floor(x / self.step).astype(int)
         self.valid = (ZZ > 0.5) & (y < self.bonnet) & (r >= 0) & (r < self.shape[0]) & (c >= 0) & (c < self.shape[1])
         self.r, self.c = np.where(self.valid, r, 0), np.where(self.valid, c, 0)
         self.z_min = self.fz * self.h / (self.bonnet - self.y_h)
 
+    def distort(self, x, y):
+        """Ideal (pinhole) pixel → where the lens puts it."""
+        xn, yn = (x - self.cx) / self.fl, (y - self.cy) / self.fl
+        s = 1 + self.k1 * (xn ** 2 + yn ** 2)
+        return self.cx + xn * s * self.fl, self.cy + yn * s * self.fl
+
+    def undistort(self, x, y):
+        """Image pixel → ideal (pinhole) pixel (fixed-point iteration)."""
+        xd, yd = (x - self.cx) / self.fl, (y - self.cy) / self.fl
+        xn, yn = xd, yd
+        for _ in range(25):
+            s = 1 + self.k1 * (xn ** 2 + yn ** 2)
+            xn, yn = xd / s, yd / s
+        return self.cx + xn * self.fl, self.cy + yn * self.fl
+
     def ground(self, x_full: float, y_full: float) -> tuple[float, float] | None:
         """Full-frame pixel on the road → (X, Z) metres, or None above the horizon."""
-        y, x = y_full * self.k, x_full * self.k
+        x, y = self.undistort(x_full * self.k, y_full * self.k)
         if y <= self.y_h + 2:
             return None
         return (x - self.cx) * self.h / (y - self.y_h), self.fz * self.h / (y - self.y_h)

@@ -127,6 +127,9 @@ def run(drv: dict, rematch: bool = True) -> dict:
         if drives.gps_track(drv) is not None:          # speed overlay: horizon + scale from parked cars
             from src.video import ground
             res.update(ground.run(drives.load(drv["key"])))
+        if (drv["folder"] / "depth.parquet").exists():   # depth in metres, fitted to the road geometry
+            from src.video import depth
+            res.update(depth.fit_to_ground(drives.load(drv["key"])))
         print(f"   depth: {res['depth_status']}" + (f", factor {res['depth_scale']}" if "depth_scale" in res else "")
               + f" ({res['depth_frames']} crosswalk-approach frames)", flush=True)
     return res

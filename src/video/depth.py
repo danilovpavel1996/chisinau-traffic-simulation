@@ -90,12 +90,71 @@ def load(drv: dict) -> tuple[np.ndarray, list[np.ndarray]]:
     return d.t.to_numpy(), maps
 
 
+FIT_RANGE_M = (6.0, 35.0)    # road pixels whose flat-road distance is trusted (validated vs GPS)
+GROUND = ("road", "lane_marking", "crosswalk")
+
+
+def fit_to_ground(drv: dict) -> dict:
+    """
+    Metric depth that agrees with the measured road-plane geometry. The model reads this
+    dashcam's distances too far, and not by one factor (2.5× close, 1.7× at 40 m: trained on
+    narrower driving cameras), so per drive: on road pixels 6–35 m ahead, where the flat-road
+    distance is calibrated (parked cars + speed), fit  depth_model = c · Z^b  and invert it.
+    """
+    from src.video.bev import Geometry
+    from src.video.scene import CODES
+    folder = drv["folder"]
+    dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t").reset_index(drop=True)
+    geo = Geometry(drv, dense.iloc[0])
+    td, maps = load(drv)
+    road = [CODES.index(c) for c in GROUND]
+    zs, ds = [], []
+    for r, t in zip(dense.to_dict("records")[::3], dense.t[::3]):
+        j = int(np.argmin(np.abs(td - t)))
+        if abs(td[j] - t) > 0.3:
+            continue
+        D = maps[j]
+        m = np.frombuffer(zlib.decompress(r["mask"]), np.uint8).reshape(json.loads(r["mask_shape"]))
+        rr, cc = np.nonzero(np.isin(m, road))
+        rr, cc = rr[::7], cc[::7]
+        y, x = r["top"] + (rr + 0.5) * r["step"], (cc + 0.5) * r["step"]
+        xu, yu = geo.undistort(x, y)
+        ok = (yu > geo.y_h + 4) & (y < geo.bonnet - 4)
+        Z = geo.fz * geo.h / (yu[ok] - geo.y_h)
+        dz = D[np.clip((y[ok] / DOWN).astype(int), 0, D.shape[0] - 1), np.clip((x[ok] / DOWN).astype(int), 0, D.shape[1] - 1)]
+        keep = (Z > FIT_RANGE_M[0]) & (Z < FIT_RANGE_M[1]) & (dz > 0)
+        zs.append(Z[keep]); ds.append(dz[keep])
+    Z, D = np.concatenate(zs), np.concatenate(ds)
+    bins = np.geomspace(*FIT_RANGE_M, 12)
+    idx = np.digitize(Z, bins)
+    mz = np.array([np.median(Z[idx == i]) for i in range(1, len(bins)) if (idx == i).sum() > 200])
+    md = np.array([np.median(D[idx == i]) for i in range(1, len(bins)) if (idx == i).sum() > 200])
+    b, logc = np.polyfit(np.log(mz), np.log(md), 1)
+    res = dict(depth_fit_c=round(float(np.exp(logc)), 4), depth_fit_b=round(float(b), 4), depth_fit_pixels=int(len(Z)))
+    cal = folder / "calibration.json"
+    c = json.loads(cal.read_text()) if cal.exists() else {}
+    c.update(res)
+    cal.write_text(json.dumps(c, indent=2))
+    print(f"→ {cal}: model depth = {res['depth_fit_c']} · Z^{res['depth_fit_b']} ({len(Z)} road pixels)", flush=True)
+    return res
+
+
+def metric(drv: dict, depth_map: np.ndarray) -> np.ndarray:
+    """Model depth → metres consistent with the road-plane geometry (fit_to_ground)."""
+    c = json.loads((drv["folder"] / "calibration.json").read_text())
+    return (np.maximum(depth_map, 1e-3) / c["depth_fit_c"]) ** (1 / c["depth_fit_b"])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("drive", help="drive key in configs/drives.yaml")
     ap.add_argument("--reuse", action="store_true", help="attach to the drive's runtime if still alive")
+    ap.add_argument("--fit", action="store_true", help="only fit the stored depth to the road geometry")
     a = ap.parse_args()
-    run_colab(drives.load(a.drive), a.reuse)
+    drv = drives.load(a.drive)
+    if not a.fit:
+        run_colab(drv, a.reuse)
+    fit_to_ground(drv)
 
 
 if __name__ == "__main__":

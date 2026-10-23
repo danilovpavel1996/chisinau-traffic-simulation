@@ -323,3 +323,18 @@ At the true horizon all cars agree on one scale.
 independent of the odometer. Camera height (car widths) 1.38 m; central focal length 646 px
 (~73° at the centre) vs ~415 px from rotation over the whole width (~99°): the lens is not a
 pinhole — it magnifies the centre more (mild barrel distortion). Next: measure the lens (GeoCalib).
+
+## Lens (GeoCalib) and metric depth (2026-10-23)
+
+`lens.py` — GeoCalib on 80 frames (Colab, 5 min): focal length **600 px** (IQR 510–715) at the
+centre of the 960-px image (~77° field of view), radial distortion **k1 = −0.24** (barrel: the
+edges squeezed ~15 % toward the centre). Agrees with the central focal length from parked cars +
+speed (646 px, within 8 %); the "99°" from rotation was an average over the distorted width.
+GeoCalib's camera tilt (~3°) is rough; the measured horizon is kept. The spatial view now
+undistorts pixels before projecting them (things beside the car were drawn too close to the
+centre line).
+
+`depth.py --fit` — Depth Anything reads this dashcam's distances too far, not by one factor;
+per drive, fitted on 719,000 road pixels 6–35 m ahead (calibrated flat-road distances):
+model depth = 2.21 · Z^0.887. Independent checks: crosswalk distances from depth alone vs GPS
+**0.99** (IQR 0.95–1.11); traffic lights **4.3 m** above the road (IQR 3.9–6.4) — realistic.
