@@ -186,3 +186,17 @@ def test_lens_calibration_from_map_turns():
     assert noisy["status"] == "kept nominal" and noisy["hfov_deg"] == 120
     few = fit(np.column_stack([map_turns[:3], map_turns[:3]]), 120)
     assert few["status"] == "kept nominal"
+
+
+def test_ground_scale_from_parked_cars():
+    import numpy as np
+    from src.video.ground import fit
+    rng = np.random.default_rng(0)
+    yh, S = 270.0, 900.0                                   # true horizon row, focal × camera height
+    cars = []
+    for z0 in rng.uniform(18, 30, 15):                     # parked cars 18–30 m ahead
+        s = np.linspace(0, 10, 8)                          # we drive 10 m past each
+        cars.append((yh + S / (z0 - s) + rng.normal(0, 0.5, len(s)), s))
+    r = fit(cars, y_guess=280.0)
+    assert r["ground_status"] == "calibrated"
+    assert abs(r["horizon_px"] - yh) <= 2 and abs(r["ground_scale"] - S) / S < 0.1

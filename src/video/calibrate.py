@@ -12,7 +12,8 @@ the map's: the slope is how much the nominal focal length is off.
 
     2026_10_23_10_06, dashcam "120°": map slope 1.58, GPS slope 1.56 → ~95° effective
 
-Depth of the spatial view (bev.py), second step: approaching a crosswalk straight ahead,
+Depth of the spatial view (bev.py): with a speed overlay, horizon and scale come from
+parked cars (ground.py, preferred); otherwise, second step here: approaching a crosswalk straight ahead,
 the distance the view shows for it must shrink exactly by the distance driven — from
 the video odometer, in metres through the map. The median ratio is the depth factor
 (2026_10_23 after the focal step: view 0.69 × odometer, 0.70 × GPS → factor 1.45).
@@ -123,6 +124,9 @@ def run(drv: dict, rematch: bool = True) -> dict:
     if (drv["folder"] / "scene_dense.parquet").exists():
         res.update(depth(drives.load(drv["key"])))
         (drv["folder"] / "calibration.json").write_text(json.dumps(res, indent=2))
+        if drives.gps_track(drv) is not None:          # speed overlay: horizon + scale from parked cars
+            from src.video import ground
+            res.update(ground.run(drives.load(drv["key"])))
         print(f"   depth: {res['depth_status']}" + (f", factor {res['depth_scale']}" if "depth_scale" in res else "")
               + f" ({res['depth_frames']} crosswalk-approach frames)", flush=True)
     return res

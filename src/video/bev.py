@@ -150,13 +150,17 @@ class Geometry:
         meta = json.loads((folder / "meta.json").read_text())
         self.k = WIDTH / meta["width"]                                 # full frame → inference px
         self.f = (WIDTH / 2) / np.tan(np.radians(cam["hfov_deg"] / 2))
-        self.y_h = horizon_from_road(drv, self.f)
-        self.h = camera_height(drv, self.y_h, self.k)
-        # depth: Z = fz·h / (y − y_h); lateral X = (x − c)·h / (y − y_h) needs no focal length.
-        # fz = f × the depth factor calibrate.py measures on crosswalk approaches (1 if none)
         cal = folder / "calibration.json"
-        self.depth_scale = json.loads(cal.read_text()).get("depth_scale", 1.0) if cal.exists() else 1.0
-        self.fz = self.f * self.depth_scale
+        c = json.loads(cal.read_text()) if cal.exists() else {}
+        # depth: Z = fz·h / (y − y_h); lateral X = (x − c)·h / (y − y_h) needs no focal length.
+        # Best: horizon and scale fz·h measured from parked cars + the overlay speed (ground.py);
+        # else the horizon where the road ends and fz = f × the crosswalk depth factor (calibrate.py)
+        measured = c.get("ground_status") == "calibrated"
+        self.y_h = c["horizon_px"] if measured else horizon_from_road(drv, self.f)
+        self.h = camera_height(drv, self.y_h, self.k)
+        self.depth_scale = c.get("depth_scale", 1.0)
+        self.fz = c["ground_scale"] / self.h if measured else self.f * self.depth_scale
+        self.source = "parked cars + speed overlay" if measured else "map (turns, crosswalks)"
         self.cx = WIDTH / 2
         self.bonnet = meta["height"] * (1 - cam["hood"]) * self.k
         self.top, self.step = int(dense_row.top), int(dense_row.step)

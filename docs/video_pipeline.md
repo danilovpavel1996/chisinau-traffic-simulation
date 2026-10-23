@@ -300,3 +300,26 @@ approaches per drive, where the video odometer's local error (± 20–30 % over 
 goes straight into the scale. Needed: a camera model calibrated from the video's geometry itself
 (lens distortion from straight lines, focal length from vanishing points), then depth fitted onto
 that ground geometry.
+
+## Distance scale from parked cars and the dashcam's speed (2026-10-23)
+
+The depth scale rested on 2–3 crosswalk approaches per drive and swung between runs (view / GPS
+0.93 → 0.73). `ground.py` measures the horizon and the scale (focal length × camera height)
+from **parked cars**: their box bottom must move as a flat road predicts while we drive at the
+**overlay speed** (GPS speed only — never GPS positions, so the route stays video-only).
+
+Tried first on the road surface and dropped: dense optical flow, flow after removing the static
+windscreen reflection (median of 120 frames), and matching row-brightness profiles in inverse
+distance. The compressed asphalt changes by 1–3 grey levels between frames at 60 km/h and the
+dashboard's reflection dominates — measured motion did not grow with the square of the row.
+
+Parked cars needed two fixes: far cars (30–80 m) barely move in the image while box edges jitter,
+so only bottoms ≥ 25 px below the horizon (≲ 30 m); and the tracker passes one ID along a row of
+parked cars, so tracks are split where the bottom edge jumps up or detections pause for > 6 m.
+At the true horizon all cars agree on one scale.
+
+2026_10_23_10_06: 47 usable car segments, 13 on clean straight lines → horizon row 272, scale 888
+→ spatial view / GPS distance on crosswalk approaches **0.93** (IQR 0.86–1.07, 18 frames), now
+independent of the odometer. Camera height (car widths) 1.38 m; central focal length 646 px
+(~73° at the centre) vs ~415 px from rotation over the whole width (~99°): the lens is not a
+pinhole — it magnifies the centre more (mild barrel distortion). Next: measure the lens (GeoCalib).
