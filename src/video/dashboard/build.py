@@ -77,8 +77,6 @@ def build_data(drv: dict) -> dict:
                start_pin=drv.get("start"), dest_pin=drv.get("destination"))
     if (folder / "bev.mp4").exists():
         out["bev"] = f"processed/{drv['key']}/bev.mp4"
-    if (folder / "strip.png").exists():
-        out["strip"] = dict(src=f"processed/{drv['key']}/strip.png", **json.loads((folder / "strip.json").read_text()))
 
     # ground truth
     gps = drives.gps_track(drv)

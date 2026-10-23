@@ -39,7 +39,6 @@ method works.
 | Night drives | ❌ rotation drift; events are noise — postponed |
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
 | **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ depth within ~7 % of GPS after calibration against the map |
-| **Stitched top-down strip** of the whole drive, with the map's side streets on it | ✅ first version: ground seen along 99 % of the route |
 | **Camera self-calibration** (no specs, no GPS): field of view from map turns, depth from crosswalk approaches | ✅ dashcam "120°" measured as 99° (GPS check agrees); refuses when the evidence is inconsistent |
 | Dashboard: video · spatial view · map (GPS point and video-only point) | ✅ `data/video/dashboard.html` |
 
@@ -115,25 +114,18 @@ would take more than ~5 min on the laptop run on Google Colab);
    crossings and signals as the map expects them from the **video-only** position and
    heading; thin green = the same from the GPS position, when there is GPS. Where colour
    and white disagree, the video-only position is wrong → `bev.mp4`.
-10. **strip** (`strip.py`). The **stitched top-down view**: every half second the sharpest
-    part of the ground plan (4–18 m ahead) is painted into one long strip at the
-    distance along the route where the car is believed to be; rows are metres along the
-    route (curves straightened), so a side street is a gap in the curb line at a
-    distance. The map's side streets (white stubs, left / right), crossings (yellow) and
-    signals (red) are drawn on the same strip → `strip.png`.
-11. **position** (`position.py`). Where the car is every second, snapped to an OSM
+10. **position** (`position.py`). Where the car is every second, snapped to an OSM
    street (from GPS if the video has it, else from the video match) → `trace.parquet`.
-12. **lanes** (`lanes.py`). Lanes visible and our lane, from road scanlines →
+11. **lanes** (`lanes.py`). Lanes visible and our lane, from road scanlines →
    `lanes.parquet`, `lanes_by_street.csv`.
-13. **signs** (`signs.py`). OCR every 2 s: street names and named places matched to
+12. **signs** (`signs.py`). OCR every 2 s: street names and named places matched to
     OSM; number plates deleted → `text.parquet`.
-14. **streets** (`street_stats.py`). Each stop with its cause (queue for the signal
+13. **streets** (`street_stats.py`). Each stop with its cause (queue for the signal
     ahead, red light, other), vehicles ahead, and per-street distance, speed and
     standing time; also combined over all drives → `stops_detail.csv`, `streets.csv`,
     `data/video/aggregate/{stops,streets,signals}.csv`.
-15. **dashboard** (`dashboard/build.py`). One page for all drives, three boxes in sync:
-    the video, the spatial view (ahead view + the stitched strip scrolling with the
-    car), and the map with the GPS point and the video-only point; plus the timeline, events, stops and queues → `data/video/dashboard.html`.
+14. **dashboard** (`dashboard/build.py`). One page for all drives, three boxes in sync:
+    the video, the spatial view, and the map with the GPS point and the video-only point; plus the timeline, events, stops and queues → `data/video/dashboard.html`.
 
 Older method, kept for comparison: the particle filter (`localize.py`, `evaluate.py`)
 works partly in daylight and fails at night; it is no longer in the default pipeline.
@@ -161,9 +153,10 @@ In priority order. Review and reorder this list as priorities change.
    opens" cue, so the alignment skips them.
    1. ~~*Calibrate the depth scale against the map*~~ — done (2026-10-23): field of view
       from map turns, depth from crosswalk approaches; depth within ~7 % of GPS.
-   1b. ~~*Stitched top-down view*~~ — done (2026-10-23): `strip.png`, the whole drive as
-      one straightened strip, each patch of road from when it was 4–18 m ahead; ground
-      seen along 99 % of the route; the map's side streets, crossings, signals on top.
+   1b. *Tesla-style surround view*: one rendered scene of the road around the car — road
+      edges, lane lines, crosswalks, other vehicles as 3D boxes where they are — replacing
+      the flat "ahead" plan. (A straightened strip of the whole drive was tried and dropped
+      from the dashboard: `strip.py` stays as a possible detector input.)
    2. *Review together*: you watch the spatial view and mark where a junction or
       feature is missed; that drives the detector.
    3. *Detector on the ground plan*: road opening left / right at a measured distance
@@ -223,7 +216,7 @@ src/
     position.py          where the car is every second, on OSM streets
     calibrate.py         camera self-calibration against the map (field of view, depth)
     bev.py               spatial view: what the camera sees vs what the map expects
-    strip.py             the drive stitched into one straightened top-down strip
+    strip.py             (not in the pipeline) the drive stitched into one straightened strip
     lanes.py, signs.py   lanes; street names / named places read in the video
     street_stats.py      stops, queues before signals, speeds per street (+ all drives)
     localize.py, evaluate.py   older particle-filter localisation (comparison only)

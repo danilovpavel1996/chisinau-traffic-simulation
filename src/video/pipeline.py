@@ -13,7 +13,6 @@ Run every step for one drive, in order:
     event_match  → event_match.json: video-only route from start + destination (event-based)
     calibrate    → calibration.json: field of view + depth scale measured against the map; re-match
     bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
-    strip        → strip.png: the whole drive stitched into one straightened top-down strip
     position     → trace.parquet: where the car is every second (GPS if available, else the match)
     lanes        → lanes.parquet, lanes_by_street.csv
     signs        → text.parquet: street names and named places read in the video (no number plates)
@@ -34,7 +33,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "calibrate", "bev", "strip", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "calibrate", "bev", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -58,9 +57,6 @@ def run_step(step: str, drv: dict):
     elif step == "bev":
         from src.video import bev
         bev.run(drv)
-    elif step == "strip":
-        from src.video import strip
-        strip.run(drv)
     elif step == "road":
         from src.video import road_geometry
         road_geometry.run(drv)
