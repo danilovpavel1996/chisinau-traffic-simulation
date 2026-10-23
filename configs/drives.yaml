@@ -44,8 +44,10 @@
     hfov_deg: 120
     hood: 0.12
   stride: 6
-  street_window_s: [100, 625]                       # from GPS: leaves home / reaches Zity Mall (150 m)
-  start: [47.058767, 28.814100]                     # first GPS fix (home)
-  destination: [47.039350, 28.803150]               # last GPS fix (Zity Mall)
+  # start / destination pins on the street (the yard and the mall car park are not in the
+  # OSM drive network); times from the video's own turn detection, not GPS:
+  street_window_s: [131, 642]                       # end of the U-turn on Mircești · start of the turn into the mall
+  start: [47.059333, 28.811350]                     # Mircești, heading south-east after the U-turn
+  destination: [47.038970, 28.803540]               # Calea Ieșilor, where the car turns into Zity Mall
   overlay:
     height_px: 46

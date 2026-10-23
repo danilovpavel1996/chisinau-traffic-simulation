@@ -63,6 +63,7 @@ REL_SIGMA = 0.2         # timing tolerance between consecutive matches: 20 % of 
 ABS_SIGMA_M = 60        # … + 60 m
 START_WEIGHT = 0.25     # timing from the start pin / to the destination counts ¼ (unknown way in and out)
 LOOKBACK_EV, LOOKBACK_SITES = 10, 16   # how far back the previous match is searched
+PIN_SLACK_M = 25             # route may start / end at a street node this much farther than the nearest
 CLUSTER_M, CLUSTER_S = 40, 6            # evaluation: OSM nodes this close in space and time = one junction
 HIGHWAY_LANES = dict(motorway=6, trunk=5, primary=4, secondary=3, tertiary=2, unclassified=2,
                      residential=1.5, living_street=1, service=1)
@@ -103,9 +104,51 @@ class RouteMap:
             return list(zip(ys, xs))
         return [(self.G.nodes[u]["y"], self.G.nodes[u]["x"]), (self.G.nodes[v]["y"], self.G.nodes[v]["x"])]
 
+    def pin_nodes(self, p, leaving: bool):
+        """
+        Street nodes for a pin. The pin lies mid-street, and nodes exist only at junctions
+        (the nearest one was 89 m away on a side street, the street itself 240 m), so it
+        is snapped to the nearest street *segments* (within PIN_SLACK_M of the nearest —
+        both carriageways of a dual road): leaving the start, the route begins at the
+        segment's head node; arriving at the destination, it ends at its tail node.
+        """
+        if not hasattr(self, "seg_tree"):
+            pts, own = [], []
+            for u, v in self.D.edges:
+                c = np.array(self.coords(u, v))
+                for a, b in zip(c, c[1:]):
+                    n = max(2, int(np.hypot((b[0] - a[0]) * 111_320, (b[1] - a[1]) * self.kx) / 5) + 1)
+                    pts.extend(np.linspace(a, b, n)); own.extend([(u, v)] * n)
+            pts = np.array(pts)
+            self.seg_tree, self.seg_own = cKDTree(np.column_stack([pts[:, 0] * 111_320, pts[:, 1] * self.kx])), own
+        d, i = self.seg_tree.query(self.xy(*p), k=200)
+        edges = {self.seg_own[j] for dd, j in zip(d, i) if dd <= d[0] + PIN_SLACK_M}
+        self.pin_edge = getattr(self, "pin_edge", {})
+        for u, v in edges:
+            self.pin_edge[(tuple(p), v if leaving else u)] = (u, v)
+        return list({v if leaving else u for u, v in edges})
+
+    def partial_edge(self, p, node, leaving: bool) -> tuple[list, int]:
+        """The street from the pin to the route's first node (leaving) or from the last node
+        to the pin (arriving), as coordinates; and the other end node of that edge."""
+        u, v = self.pin_edge[(tuple(p), node)]
+        c = np.array(self.coords(u, v))
+        q = self.xy(*p)
+        best = (np.inf, 0, c[0])
+        for k, (a, b) in enumerate(zip(c, c[1:])):
+            A, B = self.xy(*a), self.xy(*b)
+            t = np.clip(np.dot(q - A, B - A) / max(np.dot(B - A, B - A), 1e-9), 0, 1)
+            P = A + t * (B - A)
+            if np.hypot(*(q - P)) < best[0]:
+                best = (np.hypot(*(q - P)), k, a + t * (b - a))
+        _, k, proj = best
+        if leaving:
+            return [tuple(proj)] + [tuple(x) for x in c[k + 1:]], u
+        return [tuple(x) for x in c[:k + 1]] + [tuple(proj)], v
+
     def candidate_routes(self, start, dest):
         best = []
-        for a, b in itertools.product(self.nearest_nodes(start), self.nearest_nodes(dest)):
+        for a, b in itertools.product(self.pin_nodes(start, True), self.pin_nodes(dest, False)):
             try:
                 best.append((nx.shortest_path_length(self.D, a, b, weight="length"), a, b))
             except nx.NetworkXNoPath:
@@ -121,20 +164,33 @@ class RouteMap:
             routes.append(path)
         return routes, L0
 
-    def sites(self, path) -> pd.DataFrame:
-        """Junctions (with the turn made) and OSM signals / crossings along a path, in order."""
-        pts, cum, brg_in, brg_out, node_at = [], [0.0], {}, {}, {}
-        for u, v in zip(path, path[1:]):
-            c = self.coords(u, v)
+    def sites(self, path, start=None, dest=None) -> pd.DataFrame:
+        """
+        Junctions (with the turn made) and OSM signals / crossings along a path, in order.
+        With start / dest pins the route runs from the pin itself to the pin itself (the
+        street between a pin and the first junction can be hundreds of metres), and the
+        first and last nodes of the path are junctions passed like any other.
+        """
+        chunks, ext = [], list(path)
+        if start is not None:
+            c, u0 = self.partial_edge(start, path[0], True)
+            chunks.append((None, c)); ext = [u0] + ext
+        chunks += [(u, self.coords(u, v)) for u, v in zip(path, path[1:])]
+        if dest is not None:
+            c, v1 = self.partial_edge(dest, path[-1], False)
+            chunks.append((path[-1], c)); ext = ext + [v1]
+        pts, cum, node_at = [], [0.0], {}
+        for u, c in chunks:
             if pts:
                 c = c[1:]
-            node_at[u] = len(pts) - 1 if pts else 0
+            if u is not None:
+                node_at[u] = len(pts) - 1 if pts else 0
             for p in c:
                 if pts:
                     a = pts[-1]
                     cum.append(cum[-1] + np.hypot((p[0] - a[0]) * 111_320, (p[1] - a[1]) * self.kx))
                 pts.append(p)
-        node_at[path[-1]] = len(pts) - 1
+        node_at[path[-1]] = node_at.get(path[-1], len(pts) - 1) if dest is not None else len(pts) - 1
         pts = np.array(pts)
         cum = np.array(cum)
 
@@ -146,8 +202,8 @@ class RouteMap:
             return np.degrees(np.arctan2((b[1] - a[1]) * self.kx, (b[0] - a[0]) * 111_320)) % 360
 
         rows, ring = [], None
-        for k, n in enumerate(path[1:-1], start=1):
-            u, v = path[k - 1], path[k + 1]
+        for k, n in enumerate(ext[1:-1], start=1):
+            u, v = ext[k - 1], ext[k + 1]
             in_ring = self.edge(u, n).get("junction") in ("roundabout", "circular")
             out_ring = self.edge(n, v).get("junction") in ("roundabout", "circular")
             i = node_at[n]
@@ -388,7 +444,7 @@ def run(drv: dict):
           f"· {tt[-1] - tt[0]:.0f} s of video", flush=True)
     scored = []
     for path in routes:
-        s = R.sites(path)
+        s = R.sites(path, tuple(drv["start"]), tuple(drv["destination"]))
         cost, pairs = align(ev, s, m_ev, m_total)
         scored.append((cost, path, s, pairs))
     scored.sort(key=lambda x: x[0])
