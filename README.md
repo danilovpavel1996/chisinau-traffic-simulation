@@ -48,7 +48,7 @@ method works.
 | Traffic light colour | colour heuristic (brightest saturated hue in the box) | laptop | daylight only in practice |
 | Own motion: moving / stopped, speed, rotation, horizon | **optical flow** (OpenCV Lucas–Kanade, sparse corners) | laptop | speed: flow between adjacent frames; rotation: over 0.2 s |
 | Other vehicles: parked / oncoming / same direction / crossing | **dense optical flow** (OpenCV Farneback): box motion vs road under it | laptop | |
-| Crosswalks, lane markings, curbs, road, sidewalk, guard rails, poles, barriers | **Mask2Former Swin-L, Mapillary Vistas** (Meta, via Hugging Face) | free **Google Colab T4 GPU** (~2 min per drive), laptop fallback | ⚠️ weights licensed non-commercial — replace before a commercial platform |
+| Crosswalks, lane markings, curbs, road, sidewalk, guard rails, poles, barriers | **Mask2Former Swin-L, Mapillary Vistas** (Meta, via Hugging Face) | free **Google Colab T4 GPU** (~2 min per drive), laptop fallback | weights licensed for non-commercial use (CC BY-NC) — fine here, see Licensing |
 | Road width, side streets opening on the right | geometry on the segmentation maps (half-width ÷ distance below horizon) | laptop | camera-independent |
 | Dashcam overlay: time, speed, GPS | **Apple Vision OCR** (macOS built-in) | laptop | GPS = answer key only |
 | Street-name plates, named places | Apple Vision OCR + fuzzy match to OSM names | laptop | number plates detected and **deleted** (personal data, law 133/2011) |
@@ -151,9 +151,14 @@ In priority order. Review and reorder this list as priorities change.
 7. **Platform readiness:**
    - upload flow (video + start and destination pins);
    - run perception on the GPU as well once there are many uploads;
-   - replace the non-commercial segmentation weights;
    - privacy review (plates are deleted today; faces too?);
    - disk cleanup (joined videos duplicate the original clips).
+
+### Licensing
+
+This is a personal, non-commercial project. The Mask2Former Mapillary Vistas weights are
+licensed for non-commercial use only, which fits. If the project ever becomes
+commercial, the segmentation model must be replaced or licensed first.
 
 ## Repository layout
 
