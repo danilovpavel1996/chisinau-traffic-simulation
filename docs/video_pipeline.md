@@ -232,3 +232,25 @@ junction moment 22 → **44 %**, median position error 62 → 57 m; both dayligh
 correct. The speed panel showed the marker's speed (driven by the anchors); it now shows the
 video's own measured speed (scaled to the route length) — rough: correlation 0.5 with GPS,
 median difference 11 km/h.
+
+## Camera self-calibration against the map (2026-10-23)
+
+No camera specs, no GPS: `calibrate.py`, after the first matching.
+
+**Field of view.** Over 12-s windows with > 25° of heading change on the matched route, the
+video's rotation (nominal lens) is regressed on the map's. Daylight dashcam: slope **1.48**
+from the map, **1.56** from GPS → the "120°" lens is effectively **99°**. Guards: ≥ 6 windows,
+≥ 75 % turning the same way, slope 0.5–2.5 — the night drive (wrong route, 60 % agree) and
+the phone (4 windows) keep the nominal value. Estimated always from a nominal-lens match,
+so the result does not depend on earlier runs; events and matching are then re-run: position
+within 30 m at junction moments 44 → 50 %, runner-up margin 2.9 → 3.0.
+
+**Depth.** Approaching a crosswalk straight ahead, its distance in the spatial view must
+shrink by the distance driven (video odometer, metres through the map). Before: view / GPS
+distance 0.51 (nominal lens), 0.70 (calibrated lens). Depth factor (3 passes — which approaches
+qualify depends on the scale): **1.54** → view / GPS **0.93** (IQR 0.86–1.12, 17 frames). The
+camera height from car widths is 1.37 m with the calibrated lens. With the depth right, the
+nearest visible ground is 4.3 m (the bonnet hides the rest).
+
+Seen in the spatial view at 10:08:32: Strada Domniței on the map (white, video-only position)
+lines up with the road surface opening on the right in the camera layer.

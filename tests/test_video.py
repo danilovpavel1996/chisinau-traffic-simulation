@@ -173,3 +173,16 @@ def test_event_alignment_survives_unknown_way_out_of_the_start():
     m_ev = np.array([1100.0, 1800.0, 2500.0])                   # odometer; total 2800 (800 m extra)
     _, pairs = align(ev, s, m_ev, 2800.0)
     assert pairs == [(0, 0), (1, 1), (2, 2)]
+
+
+def test_lens_calibration_from_map_turns():
+    import numpy as np
+    from src.video.calibrate import fit
+    map_turns = np.array([90.0, -85, 60, -120, 45, 95, -40])
+    good = fit(np.column_stack([map_turns, 1.5 * map_turns]), 120)   # video turns 1.5× too large
+    assert good["status"] == "calibrated"
+    assert abs(good["hfov_deg"] - 2 * np.degrees(np.arctan(np.tan(np.radians(60)) / 1.5))) < 0.5   # ~98°
+    noisy = fit(np.column_stack([map_turns, [80, 70, -50, -100, 40, -90, 30]]), 120)   # wrong route: no agreement
+    assert noisy["status"] == "kept nominal" and noisy["hfov_deg"] == 120
+    few = fit(np.column_stack([map_turns[:3], map_turns[:3]]), 120)
+    assert few["status"] == "kept nominal"

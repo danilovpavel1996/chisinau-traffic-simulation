@@ -30,6 +30,14 @@ def load(key: str) -> dict:
     d["video"] = ROOT / d["video"]
     d["folder"] = PROCESSED / key
     d["folder"].mkdir(parents=True, exist_ok=True)
+    # the configured field of view is only a starting guess; calibrate.py replaces it
+    # with the value measured against the map, when that measurement is consistent
+    d["camera"] = dict(d["camera"], hfov_nominal=d["camera"]["hfov_deg"])
+    cal = d["folder"] / "calibration.json"
+    if cal.exists():
+        c = json.loads(cal.read_text())
+        if c.get("status") == "calibrated":
+            d["camera"]["hfov_deg"] = c["hfov_deg"]
     return d
 
 

@@ -98,6 +98,40 @@ def horizon_from_road(drv: dict, f: float) -> float:
     return float(np.percentile(tops, 10)) - f * CAM_H / ROAD_VISIBLE_M   # a few px: nominal h is fine
 
 
+def crosswalk_depths(drv: dict, geo: "Geometry", driven: tuple | None = None) -> np.ndarray:
+    """
+    (distance shown by the spatial view, distance driven) for frames approaching a crosswalk
+    straight ahead: the view's distance to its near edge vs the distance driven until the
+    car reaches it — `driven` = (times, cumulative metres); default the video odometer, in
+    metres through the map (the whole drive = the route length).
+    """
+    f = drv["folder"]
+    dense = pd.read_parquet(f / "scene_dense.parquet").sort_values("t").reset_index(drop=True)
+    if driven is None:
+        from src.video.event_match import odometer
+        tt, mm = odometer(drv)
+        driven = (tt, mm / mm[-1] * json.loads((f / "event_match.json").read_text())["route"]["d"][-1])
+    tt, cum = driven
+    cw = CODES.index("crosswalk")
+    near = []
+    for r in dense.to_dict("records"):
+        m = np.frombuffer(zlib.decompress(r["mask"]), np.uint8).reshape(json.loads(r["mask_shape"]))
+        c = m.shape[1] // 2
+        rows = np.flatnonzero((m[:, c - 15:c + 15] == cw).mean(axis=1) > 0.3)
+        y = r["top"] + (rows.max() + 1) * r["step"] if len(rows) else 0
+        near.append((r["t"], geo.fz * geo.h / (y - geo.y_h) if y > geo.y_h + 2 else np.nan))
+    n = pd.DataFrame(near, columns=["t", "Z"])
+    out = []
+    for _, run in n.dropna().groupby((n.Z.isna() | (n.Z.diff() > 3)).cumsum()):
+        if len(run) < 4 or run.Z.min() > geo.z_min + 2.5 or run.Z.max() < 10:   # a full approach, to the bonnet
+            continue
+        t_end, z_end = run.t.iloc[-1], run.Z.iloc[-1]
+        for t, z in zip(run.t, run.Z):
+            if z >= 6:
+                out.append((z, np.interp(t_end, tt, cum) - np.interp(t, tt, cum) + z_end))
+    return np.array(out).reshape(-1, 2)
+
+
 def camera_height(drv: dict, y_h: float, k: float) -> float:
     """Camera height from cars near the image centre: h = CAR_W · (bottom − horizon) / width."""
     meta = json.loads((drv["folder"] / "meta.json").read_text())
@@ -118,6 +152,11 @@ class Geometry:
         self.f = (WIDTH / 2) / np.tan(np.radians(cam["hfov_deg"] / 2))
         self.y_h = horizon_from_road(drv, self.f)
         self.h = camera_height(drv, self.y_h, self.k)
+        # depth: Z = fz·h / (y − y_h); lateral X = (x − c)·h / (y − y_h) needs no focal length.
+        # fz = f × the depth factor calibrate.py measures on crosswalk approaches (1 if none)
+        cal = folder / "calibration.json"
+        self.depth_scale = json.loads(cal.read_text()).get("depth_scale", 1.0) if cal.exists() else 1.0
+        self.fz = self.f * self.depth_scale
         self.cx = WIDTH / 2
         self.bonnet = meta["height"] * (1 - cam["hood"]) * self.k
         self.top, self.step = int(dense_row.top), int(dense_row.step)
@@ -130,26 +169,31 @@ class Geometry:
         Z = Z_RANGE[1] - (np.arange(H) + 0.5) / PX_PER_M
         XX, ZZ = np.meshgrid(X, Z)
         with np.errstate(divide="ignore", invalid="ignore"):
-            y = self.y_h + self.f * self.h / ZZ
-            x = self.cx + self.f * XX / ZZ
+            y = self.y_h + self.fz * self.h / ZZ
+            x = self.cx + XX * (y - self.y_h) / self.h
         r = np.floor((y - self.top) / self.step).astype(int)
         c = np.floor(x / self.step).astype(int)
         self.valid = (ZZ > 0.5) & (y < self.bonnet) & (r >= 0) & (r < self.shape[0]) & (c >= 0) & (c < self.shape[1])
         self.r, self.c = np.where(self.valid, r, 0), np.where(self.valid, c, 0)
-        self.z_min = self.f * self.h / (self.bonnet - self.y_h)
+        self.z_min = self.fz * self.h / (self.bonnet - self.y_h)
 
     def ground(self, x_full: float, y_full: float) -> tuple[float, float] | None:
         """Full-frame pixel on the road → (X, Z) metres, or None above the horizon."""
         y, x = y_full * self.k, x_full * self.k
         if y <= self.y_h + 2:
             return None
-        Z = self.f * self.h / (y - self.y_h)
-        return (x - self.cx) * Z / self.f, Z
+        return (x - self.cx) * self.h / (y - self.y_h), self.fz * self.h / (y - self.y_h)
 
     def px(self, X, Z):
         """Ground metres → canvas pixel (int arrays)."""
         return (np.round((np.asarray(X) - X_RANGE[0]) * PX_PER_M).astype(int),
                 np.round((Z_RANGE[1] - np.asarray(Z)) * PX_PER_M).astype(int))
+
+
+def ascii_name(name: str) -> str:
+    """'Domniței' → 'Domnitei' (the drawing font has no diacritics)."""
+    import unicodedata
+    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
 
 
 class MapLayer:
@@ -213,7 +257,7 @@ class MapLayer:
             if filled and not name.startswith("("):
                 j = int(np.argmin(np.hypot(X, Z - 15)))                 # label near 15 m ahead
                 if -14 < X[j] < 14 and 2 < Z[j] < 38:
-                    names.append((name.removeprefix("Strada "), int(u[j]), int(v[j])))
+                    names.append((ascii_name(name.removeprefix("Strada ")), int(u[j]), int(v[j])))
         if filled:
             cv2.addWeighted(band, 0.22, img, 0.78, 0, img)
             if self.feat_tree is not None:

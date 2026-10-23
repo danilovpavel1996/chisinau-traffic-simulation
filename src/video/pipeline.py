@@ -11,6 +11,7 @@ Run every step for one drive, in order:
     road         → road.parquet: road width + side-street openings from the class maps
     events       → events.parquet: junction events seen in the video (turns, roundabouts, crosswalks, signals)
     event_match  → event_match.json: video-only route from start + destination (event-based)
+    calibrate    → calibration.json: field of view + depth scale measured against the map; re-match
     bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
     position     → trace.parquet: where the car is every second (GPS if available, else the match)
     lanes        → lanes.parquet, lanes_by_street.csv
@@ -32,7 +33,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "bev", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "calibrate", "bev", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -50,6 +51,9 @@ def run_step(step: str, drv: dict):
         from src.video import scene
         scene.run_colab(drv)
         scene.run_colab(drv, dense=True)
+    elif step == "calibrate":
+        from src.video import calibrate
+        calibrate.run(drv)
     elif step == "bev":
         from src.video import bev
         bev.run(drv)

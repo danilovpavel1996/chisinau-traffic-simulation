@@ -33,12 +33,13 @@ method works.
 | | Status |
 |---|---|
 | Detect vehicles, traffic lights, crosswalks, lanes, curbs from the video | ✅ works in daylight; at night lights and crosswalks are weak |
-| Own motion: moving / stopped, speed, turns, roundabouts | ✅ moving / stopped 88 % vs GPS; ⚠️ speed rough (± ~11 km/h, correlation 0.5); turn angles ~1.5× too large |
+| Own motion: moving / stopped, speed, turns, roundabouts | ✅ moving / stopped 88 % vs GPS; turn angles right after calibration; ⚠️ speed rough (± ~11 km/h, correlation 0.5) |
 | Which **route** was driven (video only, start + destination) | ✅ daylight: right route on both daylight drives (out of 300 candidates) |
-| Which **junction at which moment** (target ≈ 80 %) | ⚠️ 44 % in daylight (8 of 18 junctions); position within 30 m at 44 % of junction moments — see plan, step 1 |
+| Which **junction at which moment** (target ≈ 80 %) | ⚠️ 44 % in daylight (8 of 18 junctions); position within 30 m at 50 % of junction moments — see plan, step 1 |
 | Night drives | ❌ rotation drift; events are noise — postponed |
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
-| **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ first version (2026-10-23); depth scale not yet calibrated |
+| **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ depth within ~7 % of GPS after calibration against the map |
+| **Camera self-calibration** (no specs, no GPS): field of view from map turns, depth from crosswalk approaches | ✅ dashcam "120°" measured as 99° (GPS check agrees); refuses when the evidence is inconsistent |
 | Dashboard: video · spatial view · map (GPS point and video-only point) | ✅ `data/video/dashboard.html` |
 
 ### Models and data sources — what detects what
@@ -56,7 +57,8 @@ method works.
 | Street-name plates, named places | Apple Vision OCR + fuzzy match to OSM names | laptop | number plates detected and **deleted** (personal data, law 133/2011) |
 | Streets, junctions, roundabouts, signals, crossings, lanes | **OpenStreetMap** (osmnx graph + `chisinau_full.osm`) | laptop | free, no paid traffic APIs |
 | Route + position from video events | **event alignment** (dynamic programming, no ML) | laptop | ~30 s per drive |
-| Spatial view (bird's-eye plan of the road ahead) | flat-road projection of the segmentation; horizon from where the road ends, camera height from car widths | laptop | ~20 s per drive |
+| Camera field of view, depth scale | **self-calibration against the map**: video rotation vs map heading change over 12-s windows; crosswalk distances vs distance driven | laptop | ~1 min per drive (includes re-matching) |
+| Spatial view (bird's-eye plan of the road ahead) | flat-road projection of the segmentation; horizon from where the road ends, camera height from car widths, calibrated depth | laptop | ~20 s per drive |
 
 ### The pipeline, step by step
 
@@ -100,23 +102,29 @@ would take more than ~5 min on the laptop run on Google Colab);
    the nearest street segment).
 
    → `event_match.json`. With GPS it also scores itself (junction matching rate).
-8. **bev** (`bev.py`). The **spatial view**, every half second: a bird's-eye plan of the
+8. **calibrate** (`calibrate.py`). The camera calibrates itself against the map, with
+   no camera specs and no GPS: the matched route's bends give the true heading changes,
+   and the video's measured rotation over the same windows gives the lens's field of view.
+   Then depth: approaching a crosswalk, its distance in the spatial view must shrink by
+   the distance driven. Applied only when the evidence agrees; then events and matching
+   are re-run → `calibration.json` (used by every later step).
+9. **bev** (`bev.py`). The **spatial view**, every half second: a bird's-eye plan of the
    ~40 m ahead. Colour = what the camera sees (road, lane markings, crosswalks,
    sidewalk, curbs, grass verges; vehicles from their boxes). White = the OSM streets,
    crossings and signals as the map expects them from the **video-only** position and
    heading; thin green = the same from the GPS position, when there is GPS. Where colour
    and white disagree, the video-only position is wrong → `bev.mp4`.
-9. **position** (`position.py`). Where the car is every second, snapped to an OSM
+10. **position** (`position.py`). Where the car is every second, snapped to an OSM
    street (from GPS if the video has it, else from the video match) → `trace.parquet`.
-10. **lanes** (`lanes.py`). Lanes visible and our lane, from road scanlines →
+11. **lanes** (`lanes.py`). Lanes visible and our lane, from road scanlines →
    `lanes.parquet`, `lanes_by_street.csv`.
-11. **signs** (`signs.py`). OCR every 2 s: street names and named places matched to
+12. **signs** (`signs.py`). OCR every 2 s: street names and named places matched to
     OSM; number plates deleted → `text.parquet`.
-12. **streets** (`street_stats.py`). Each stop with its cause (queue for the signal
+13. **streets** (`street_stats.py`). Each stop with its cause (queue for the signal
     ahead, red light, other), vehicles ahead, and per-street distance, speed and
     standing time; also combined over all drives → `stops_detail.csv`, `streets.csv`,
     `data/video/aggregate/{stops,streets,signals}.csv`.
-13. **dashboard** (`dashboard/build.py`). One page for all drives, three boxes in sync:
+14. **dashboard** (`dashboard/build.py`). One page for all drives, three boxes in sync:
     the video, the spatial view, and the map with the GPS point and the video-only
     point; plus the timeline, events, stops and queues → `data/video/dashboard.html`.
 
@@ -129,7 +137,7 @@ works partly in daylight and fails at night; it is no longer in the default pipe
 |---|---|---|---|---|
 | `2026_10_22_10_21AM` home → Zity Mall, ~5 km | iPhone | day | no (truth = Google directions) | full correct route (99 % of it, all within 30 m); clear margin over the runner-up |
 | `2026_10_22_18_16` Zity Mall → home, 7 km | dashcam | dusk / night | yes | 81 % of junctions on the chosen route; 0 % at the right moment |
-| `2026_10_23_10_06` home → Zity Mall, same route, ~5 km | dashcam | day | yes | right route (20 of 21 junctions on it); 44 % of junctions at the right moment; position median error 57 m. Pins: after the U-turn on Mircești → the turn into the mall |
+| `2026_10_23_10_06` home → Zity Mall, same route, ~5 km | dashcam | day | yes | right route (20 of 21 junctions on it); 44 % of junctions at the right moment; position within 30 m at 50 % of junction moments; median error 59 m; lens calibrated 120° → 99°. Pins: after the U-turn on Mircești → the turn into the mall |
 
 Measured on the evening dashcam drive against GPS: 56 % of junctions get a video cue;
 crosswalk precision 83 %; all 5 real turns caught, plus 6 false turns. On the morning
@@ -144,9 +152,11 @@ In priority order. Review and reorder this list as priorities change.
 1. **Junction detection in daylight, through the spatial view** — the current
    bottleneck. About half of the junctions show no cue or only a weak "side street
    opens" cue, so the alignment skips them.
-   1. *Calibrate the depth scale against the map* (now ~1.5× too short; the lens is not
-      the nominal 120° pinhole): the ground motion between two matched junctions must
-      equal their distance on the map.
+   1. ~~*Calibrate the depth scale against the map*~~ — done (2026-10-23): field of view
+      from map turns, depth from crosswalk approaches; depth within ~7 % of GPS.
+   1b. *Stitched top-down view*: consecutive frames combined using the car's own motion,
+      each patch of road taken when it was 4–10 m ahead (sharpest) → a continuous plan of
+      the road with lane markings, crosswalks and curb gaps where side streets join.
    2. *Review together*: you watch the spatial view and mark where a junction or
       feature is missed; that drives the detector.
    3. *Detector on the ground plan*: road opening left / right at a measured distance
@@ -204,6 +214,7 @@ src/
     event_match.py       video-only route + position: align events with route sites
     roads.py, truth.py   OpenStreetMap street graph; truth route from driving directions
     position.py          where the car is every second, on OSM streets
+    calibrate.py         camera self-calibration against the map (field of view, depth)
     bev.py               spatial view: what the camera sees vs what the map expects
     lanes.py, signs.py   lanes; street names / named places read in the video
     street_stats.py      stops, queues before signals, speeds per street (+ all drives)
