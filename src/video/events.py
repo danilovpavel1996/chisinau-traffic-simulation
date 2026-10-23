@@ -37,6 +37,8 @@ from src.video.motion import ego_states, stops, turns
 
 MERGE_S = 8.0
 SIGNAL_NEAR = 0.035     # traffic-light box height / frame height: close enough to be "this junction"
+SIGNAL_CONF = 0.3       # median detector confidence of the cluster: red leaves through rain drops were
+                        # "traffic lights" at 0.11–0.14; the real light passed at 509 s had 0.60 (2026_10_23)
 ROUNDABOUT_EXTRA = 90   # deg of rotation beyond the net angle that marks a roundabout
 
 
@@ -59,7 +61,7 @@ def cue_list(drv: dict) -> pd.DataFrame:
     if len(tl):
         grp = (tl.t.diff() > 4).cumsum()                     # one cluster per light we drive up to
         for _, g in tl.groupby(grp):
-            if len(g) >= 3:
+            if g.frame.nunique() >= 3 and g.conf.median() >= SIGNAL_CONF:
                 cues.append(dict(t=float(g.t.iat[-1]), kind="signal"))
     for r in stops(e).itertuples():
         cues.append(dict(t=float(r.t_end), kind="stop"))

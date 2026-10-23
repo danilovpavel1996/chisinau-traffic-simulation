@@ -33,9 +33,9 @@ method works.
 | | Status |
 |---|---|
 | Detect vehicles, traffic lights, crosswalks, lanes, curbs from the video | ✅ works in daylight; at night lights and crosswalks are weak |
-| Own motion: moving / stopped, speed, turns, roundabouts | ✅ daylight; speed fixed above 50 km/h (2026-10-23) |
+| Own motion: moving / stopped, speed, turns, roundabouts | ✅ moving / stopped 88 % vs GPS; ⚠️ speed rough (± ~11 km/h, correlation 0.5); turn angles ~1.5× too large |
 | Which **route** was driven (video only, start + destination) | ✅ daylight: right route on both daylight drives (out of 300 candidates) |
-| Which **junction at which moment** (target ≈ 80 %) | ⚠️ 33 % in daylight (6 of 18 junctions) — see plan, step 1 |
+| Which **junction at which moment** (target ≈ 80 %) | ⚠️ 44 % in daylight (8 of 18 junctions); position within 30 m at 44 % of junction moments — see plan, step 1 |
 | Night drives | ❌ rotation drift; events are noise — postponed |
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
 | **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ first version (2026-10-23); depth scale not yet calibrated |
@@ -129,7 +129,7 @@ works partly in daylight and fails at night; it is no longer in the default pipe
 |---|---|---|---|---|
 | `2026_10_22_10_21AM` home → Zity Mall, ~5 km | iPhone | day | no (truth = Google directions) | full correct route (99 % of it, all within 30 m); clear margin over the runner-up |
 | `2026_10_22_18_16` Zity Mall → home, 7 km | dashcam | dusk / night | yes | 81 % of junctions on the chosen route; 0 % at the right moment |
-| `2026_10_23_10_06` home → Zity Mall, same route, ~5 km | dashcam | day | yes | right route (20 of 21 junctions on it); 33 % of junctions at the right moment; position median error 62 m. Pins: after the U-turn on Mircești → the turn into the mall |
+| `2026_10_23_10_06` home → Zity Mall, same route, ~5 km | dashcam | day | yes | right route (20 of 21 junctions on it); 44 % of junctions at the right moment; position median error 57 m. Pins: after the U-turn on Mircești → the turn into the mall |
 
 Measured on the evening dashcam drive against GPS: 56 % of junctions get a video cue;
 crosswalk precision 83 %; all 5 real turns caught, plus 6 false turns. On the morning
@@ -151,7 +151,11 @@ In priority order. Review and reorder this list as priorities change.
       feature is missed; that drives the detector.
    3. *Detector on the ground plan*: road opening left / right at a measured distance
       ahead, crosswalks, stop lines — compared with the junction the map expects next.
-      Also vehicles crossing ahead, traffic-sign classes.
+      Also vehicles crossing ahead.
+   4. *Traffic-sign types*: a yield sign (red triangle), stop, priority road, roundabout
+      signs announce a junction tens of metres ahead and say which kind. Needs a
+      sign-type detector (e.g. a YOLO model trained on the Mapillary traffic-sign
+      dataset, on Colab); today only "a sign" is segmented, not its type.
 
    Target: ≈ 80 % of junctions at the right moment (±8 s) on `2026_10_23_10_06`.
 2. **Tighter position between junctions.** After the first alignment, re-fit the

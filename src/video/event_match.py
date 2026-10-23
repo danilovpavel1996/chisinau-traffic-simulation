@@ -61,7 +61,7 @@ WIDTH_WEIGHT = 0.0      # cost reduction per unit of width correlation (video vs
                         # it never helped (10_21AM: no change; 10_23: flipped the right route to a wrong one)
 REL_SIGMA = 0.2         # timing tolerance between consecutive matches: 20 % of the stretch …
 ABS_SIGMA_M = 60        # … + 60 m
-START_WEIGHT = 0.25     # timing from the start pin / to the destination counts ¼ (unknown way in and out)
+START_WEIGHT = 1.0     # timing from the start pin / to the destination counts ¼ (unknown way in and out)
 LOOKBACK_EV, LOOKBACK_SITES = 10, 16   # how far back the previous match is searched
 PIN_SLACK_M = 25             # route may start / end at a street node this much farther than the nearest
 CLUSTER_M, CLUSTER_S = 40, 6            # evaluation: OSM nodes this close in space and time = one junction
@@ -374,15 +374,27 @@ def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
     Cumulative video speed index over the street window — distance up to an unknown
     scale (no GPS). Proportional *distance*, not moving time: creeping in a queue at
     8 km/h and cruising at 50 km/h must not count the same.
+
+    Speed = scene flow (rotation removed), not the road-plane speed: the road-plane
+    speed depends on the road's tilt and read 2× too high going downhill on Mircești,
+    putting the car 500 m ahead in the first minute (2026_10_23). With scene flow the
+    position at junction moments is within 30 m for 8 of 18 junctions (road plane: 5).
     """
     folder, cam = drv["folder"], drv["camera"]
     meta = json.loads((folder / "meta.json").read_text())
     e = ego_states(pd.read_parquet(folder / "ego.parquet"), meta["width"], cam["hfov_deg"], cam["hood"])
     t0, t1 = drv.get("street_window_s", [e.t.min(), e.t.max()])
     e = e[(e.t >= t0) & (e.t <= t1)]
-    v = np.where(e.moving, e.speed_idx.fillna(0).clip(lower=0), 0.0)
+    v = np.where(e.moving, e.flow_smooth.fillna(0).clip(lower=0), 0.0)
     v = pd.Series(v).rolling(15, center=True, min_periods=1).median().to_numpy()   # ~3 s: kill spikes
     return e.t.to_numpy(), np.cumsum(v * e.t.diff().fillna(0).to_numpy())
+
+
+def video_kmh(secs, tt, mm, L) -> np.ndarray:
+    """The video's own speed, km/h: odometer rate scaled so the whole drive = the route length."""
+    d = np.interp(secs, tt, mm) / mm[-1] * L
+    v = pd.Series(np.gradient(d, secs) * 3.6).rolling(5, center=True, min_periods=1).median()
+    return v.clip(lower=0).round(0).to_numpy()
 
 
 def positions(ev, s, pairs, tt, mm):
@@ -477,7 +489,7 @@ def run(drv: dict):
                route_km=round(L / 1000, 2), streets=[n for n in names if not n.startswith("(")],
                events=len(ev), sites=len(s), matched=matched,
                trace=dict(video_s=secs.tolist(), lat=np.round(lat, 6).tolist(), lon=np.round(lon, 6).tolist(),
-                          d=np.round(d_s, 1).tolist()),
+                          d=np.round(d_s, 1).tolist(), kmh=video_kmh(secs, tt, mm, L).tolist()),
                route=dict(lat=np.round(s.attrs["pts"][:, 0], 6).tolist(), lon=np.round(s.attrs["pts"][:, 1], 6).tolist(),
                           d=np.round(s.attrs["cum"], 1).tolist()),
                runner_up_cost=round(scored[1][0], 2) if len(scored) > 1 else None)

@@ -216,3 +216,19 @@ onto the ground and draws the map's expectation on top, from the video-only pose
 - First use: at Columna × Henri Coandă (533 s) the camera sees a side street opening on the
   right where the GPS-pose map has the junction, while the video-only-pose map shows a
   straight street — the video-only position is behind there.
+
+## Red arrow 500 m ahead at the start (2026-10-23, reported from the dashboard)
+
+At 10:08:33 the video-only position was 827 m along the route, the truth 320 m, and the
+panel showed 115 km/h (GPS 63). Two causes:
+- a **false traffic light** at 179 s — red autumn leaves through rain drops, YOLO confidence
+  0.11–0.32 — matched to the signal at Mircești × Petricani (passed at 216 s). The signal cue
+  now needs a median confidence ≥ 0.3 over ≥ 3 frames (the real light at 509 s: 0.60);
+- the **road-plane speed** read ~2× too high going downhill on Mircești (it depends on the
+  road's tilt). The odometer now uses scene flow: at 147 s the position is 302 m (true 320).
+
+Result: physical junctions at the right moment 33 → **44 %**, position within 30 m at the
+junction moment 22 → **44 %**, median position error 62 → 57 m; both daylight routes still
+correct. The speed panel showed the marker's speed (driven by the anchors); it now shows the
+video's own measured speed (scaled to the route length) — rough: correlation 0.5 with GPS,
+median difference 11 km/h.

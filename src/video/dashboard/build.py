@@ -106,6 +106,8 @@ def build_data(drv: dict) -> dict:
         kx = 111_320 * np.cos(np.radians(tr.lat.mean()))
         dx, dy = np.gradient(tr.lon) * kx, np.gradient(tr.lat) * 111_320
         tr["speed_kmh"] = pd.Series(np.hypot(dx, dy) * 3.6).rolling(5, center=True, min_periods=1).mean().round(0)
+        if "kmh" in tr:                    # the video's own measured speed, not the speed of the marker
+            tr["speed_kmh"] = tr["kmh"]
         tr["bearing"] = (np.degrees(np.arctan2(dx, dy)) % 360).round(0)
         if "street" not in tr:
             tr["street"] = ""
