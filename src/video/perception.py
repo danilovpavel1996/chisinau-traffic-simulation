@@ -2,13 +2,23 @@
 perception.py
 -------------
 Single pass over a drive's video:
-  - YOLO detection + ByteTrack tracking of vehicles and traffic lights
+  - detection (RT-DETRv2 on the Colab GPU, or YOLO11s on the laptop) + BoT-SORT
+    tracking with re-identification of vehicles and traffic lights
   - colour (red / yellow / green) of every detected traffic light
   - optical flow: the car's own motion (speed, rotation, horizon row) and each
     vehicle's motion relative to the road below it (parked vs moving)
 
 Usage:
-    .venv-video/bin/python -m src.video.perception <drive> [--ego-only]
+    .venv-video/bin/python -m src.video.perception <drive> --colab       # RT-DETRv2 on a free Colab T4
+    .venv-video/bin/python -m src.video.perception <drive>               # laptop: YOLO11s (slow, CPU)
+    .venv-video/bin/python -m src.video.perception <drive> --ego-only    # recompute motion only
+
+Detectors (COCO-trained, accuracy on COCO val):
+    rtdetr2   RT-DETRv2, ResNet-101 backbone (Hugging Face PekingU/rtdetr_v2_r101vd), ~54 AP
+    yolo      YOLO11s, 47 AP — kept for laptop runs and comparison
+Tracker: BoT-SORT (botsort_dashcam.yaml) — camera-motion compensation (the dashcam moves
+and turns) and appearance re-identification (yolo26s-reid), so a car hidden behind a
+trolleybus keeps its ID.
 
 Settings (stride, bonnet line) come from configs/drives.yaml.
 Outputs (data/video/processed/<drive>/):
@@ -29,8 +39,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
-from ultralytics import YOLO
-
 from src.video import drives
 from src.video.compute import limit_cpu, progress
 from src.video.drives import ROOT
@@ -40,7 +48,75 @@ CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck", 9: "traffic_light"}
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
 
 MODEL = ROOT / "models" / "yolo11s.pt"   # yolo11s: ~2x the oncoming/light recall of yolo11n, 1.45x slower on CPU
-TRACKER = str(Path(__file__).with_name("bytetrack_dashcam.yaml"))
+RTDETR = "PekingU/rtdetr_v2_r101vd"
+TRACKER = Path(__file__).with_name("botsort_dashcam.yaml")
+COCO_NAMES = {"car": "car", "motorcycle": "motorcycle", "motorbike": "motorcycle", "bus": "bus", "truck": "truck",
+              "traffic light": "traffic_light"}
+
+
+# ── Detection + tracking ──────────────────────────────────────────────────────
+class YoloDetector:
+    def __init__(self, imgsz: int, conf: float):
+        from ultralytics import YOLO
+        self.model, self.imgsz, self.conf = YOLO(str(MODEL)), imgsz, conf
+
+    def __call__(self, frame: np.ndarray):
+        r = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, classes=list(CLASSES), verbose=False)[0]
+        if r.boxes is None or not len(r.boxes):
+            return np.zeros((0, 4)), np.zeros(0), []
+        return (r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(),
+                [CLASSES[int(c)] for c in r.boxes.cls.cpu().numpy()])
+
+
+class RTDetrV2Detector:
+    def __init__(self, conf: float, device: str):
+        import torch
+        from transformers import AutoImageProcessor, RTDetrV2ForObjectDetection
+        self.torch, self.device, self.conf = torch, device, conf
+        self.proc = AutoImageProcessor.from_pretrained(RTDETR)
+        self.model = RTDetrV2ForObjectDetection.from_pretrained(RTDETR).to(device).eval()
+        self.names = {i: COCO_NAMES.get(n) for i, n in self.model.config.id2label.items()}
+
+    def __call__(self, frame: np.ndarray):
+        h, w = frame.shape[:2]
+        inputs = self.proc(images=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), return_tensors="pt").to(self.device)
+        with self.torch.no_grad(), self.torch.autocast(self.device, enabled=self.device == "cuda"):
+            out = self.model(**inputs)
+        r = self.proc.post_process_object_detection(out, threshold=self.conf, target_sizes=[(h, w)])[0]
+        keep = [i for i, lab in enumerate(r["labels"].tolist()) if self.names.get(lab)]
+        return (r["boxes"][keep].float().cpu().numpy(), r["scores"][keep].float().cpu().numpy(),
+                [self.names[r["labels"][i].item()] for i in keep])
+
+
+class Dets:
+    """Detections in the form Ultralytics' trackers read: xywh, conf, cls, boolean indexing."""
+
+    def __init__(self, xyxy: np.ndarray, conf: np.ndarray, cls: np.ndarray):
+        self.xyxy, self.conf, self.cls = xyxy.reshape(-1, 4), conf, cls
+
+    @property
+    def xywh(self) -> np.ndarray:
+        x1, y1, x2, y2 = self.xyxy.T
+        return np.column_stack([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1])
+
+    def __len__(self):
+        return len(self.conf)
+
+    def __getitem__(self, i):
+        return Dets(self.xyxy[i], self.conf[i], self.cls[i])
+
+
+def make_tracker(reid: bool, device: str = "cpu"):
+    from ultralytics.trackers.bot_sort import BOTSORT
+    from ultralytics.utils import IterableSimpleNamespace, YAML
+    cfg = YAML.load(TRACKER)
+    cfg["with_reid"] = reid
+    # the ReID model's GPU backend needs an explicit device index: with plain "cuda" it failed
+    # to start ("device_id: None") and silently ran on the CPU at ~3 s per frame
+    cfg["device"] = "cuda:0" if device == "cuda" else device
+    import inspect
+    args = IterableSimpleNamespace(**cfg)                 # older versions scale track_buffer by frame_rate / 30
+    return BOTSORT(args, frame_rate=30) if "frame_rate" in inspect.signature(BOTSORT.__init__).parameters else BOTSORT(args)
 
 
 # ── Traffic light colour ──────────────────────────────────────────────────────
@@ -243,7 +319,7 @@ class SceneFlow:
 
 # ── Main pass ─────────────────────────────────────────────────────────────────
 def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float | None = None,
-        imgsz: int = 640, conf: float = 0.1) -> Path:
+        imgsz: int = 640, conf: float = 0.1, detector: str = "yolo", reid: bool = True, device: str = "cpu") -> Path:
     video, stride, hood = drv["video"], drv["stride"], drv["camera"]["hood"]
     limit_cpu()
     cap = cv2.VideoCapture(str(video))
@@ -263,7 +339,9 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
     if ego_only:  # recompute motion only; mask cars with the saved detections
         saved = {f: g for f, g in pd.read_parquet(out_dir / "detections.parquet").groupby("frame")}
     else:
-        model = YOLO(str(MODEL))
+        detect = RTDetrV2Detector(conf, device) if detector == "rtdetr2" else YoloDetector(imgsz, conf)
+        tracker = make_tracker(reid, device)
+        names = sorted(set(CLASSES.values()))
     flow = SceneFlow(W, H, hood=hood)
 
     det_rows, ego_rows = [], []
@@ -291,16 +369,12 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
             f += 1
             continue
 
-        res = model.track(frame, persist=True, tracker=TRACKER, imgsz=imgsz,
-                          conf=conf, classes=list(CLASSES), verbose=False)[0]
-        if res.boxes is not None and len(res.boxes):
-            xyxy = res.boxes.xyxy.cpu().numpy().astype(int)
-            cls = res.boxes.cls.cpu().numpy().astype(int)
-            cf = res.boxes.conf.cpu().numpy()
-            ids = (res.boxes.id.cpu().numpy().astype(int)
-                   if res.boxes.id is not None else np.full(len(cls), -1))
-            for (x1, y1, x2, y2), c, p, tid in zip(xyxy, cls, cf, ids):
-                name = CLASSES[c]
+        xyxy, cf, labels = detect(frame)
+        tracks = tracker.update(Dets(xyxy, cf, np.array([names.index(n) for n in labels], float)), frame)
+        if len(tracks):
+            idx = tracks[:, 7].astype(int)                  # tracked detections: their own box, score, class
+            for (x1, y1, x2, y2), p, name, tid in zip(xyxy[idx].astype(int), cf[idx], [labels[i] for i in idx],
+                                                      tracks[:, 4].astype(int)):
                 if name in VEHICLE_CLASSES and (y1 + y2) / 2 > H * (1 - hood):
                     continue  # bonnet / dashboard detected as a car
                 rows.append(dict(frame=f, t=t, track_id=int(tid), cls=name, conf=float(p),
@@ -331,13 +405,56 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
     det = pd.DataFrame(det_rows)
     det.to_parquet(out_dir / "detections.parquet", index=False)
     meta = dict(video=str(video.relative_to(ROOT)), fps=fps, width=W, height=H, stride=stride,
-                start_s=start, end_s=f / fps, model=MODEL.name, imgsz=imgsz, conf=conf,
-                hood=hood, tracker=Path(TRACKER).name,
+                start_s=start, end_s=f / fps, model=RTDETR if detector == "rtdetr2" else MODEL.name,
+                imgsz=imgsz, conf=conf, hood=hood, tracker=TRACKER.name, reid=reid,
                 n_sampled_frames=len(ego_df), n_detections=len(det),
                 runtime_s=round(time.time() - t0, 1))
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta, indent=2))
     return out_dir
+
+
+# ── Google Colab (free GPU) ───────────────────────────────────────────────────
+SHIP = ["src/video/__init__.py", "src/video/perception.py", "src/video/compute.py", "src/video/drives.py",
+        "src/video/botsort_dashcam.yaml", "configs/drives.yaml"]
+OUTPUTS = ["detections.parquet", "ego.parquet", "meta.json"]
+
+
+def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bool = False):
+    """The same perception code on a Colab T4: ship code + video, run detached, fetch the outputs."""
+    import io
+    import zipfile
+    from src.video.colab import Session
+    folder, key = drv["folder"], drv["key"]
+    for name in ("detections.parquet", "ego.parquet", "meta.json"):         # keep the laptop (YOLO) run to compare
+        old, keep = folder / name, folder / name.replace(".", "_yolo.", 1)
+        if old.exists() and not keep.exists() and "yolo11" in (folder / "meta.json").read_text():
+            keep.write_bytes(old.read_bytes())
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for rel in SHIP:
+            z.write(ROOT / rel, rel)
+    code = folder / "colab" / "perception_code.zip"
+    code.parent.mkdir(exist_ok=True)
+    code.write_bytes(buf.getvalue())
+    video_rel = drv["video"].relative_to(ROOT)
+    t0 = time.time()
+    with Session(f"perception-{key}", reuse=reuse) as s:
+        s.upload(code, "/content/repo/code.zip")
+        s.upload(drv["video"], f"/content/repo/{video_rel}")
+        s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
+        s.start(f"""import subprocess, sys, zipfile
+zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo")
+sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
+                          "--device", "cuda"] + ([] if {reid} else ["--no-reid"]), cwd="/content/repo"))
+""")
+        code_ = s.wait()
+        if code_ != 0:
+            print(s.log())
+            raise RuntimeError(f"perception on Colab failed (exit {code_})")
+        for name in OUTPUTS:
+            s.download(f"/content/repo/data/video/processed/{key}/{name}", folder / name)
+    print(f"Colab perception ({detector}) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
 
 
 def main():
@@ -347,8 +464,19 @@ def main():
                     help="recompute ego.parquet only, reusing saved detections (fast)")
     ap.add_argument("--start", type=float, default=0.0, help="start time, seconds (for quick tests)")
     ap.add_argument("--duration", type=float, default=None, help="seconds to process (default: all)")
+    ap.add_argument("--detector", choices=["rtdetr2", "yolo"], default=None,
+                    help="default: rtdetr2 with --colab, yolo on the laptop")
+    ap.add_argument("--no-reid", action="store_true", help="BoT-SORT without appearance re-identification")
+    ap.add_argument("--device", default="cpu", help="cpu / cuda")
+    ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
+    ap.add_argument("--reuse", action="store_true", help="with --colab: attach to the drive's runtime if still alive")
     a = ap.parse_args()
-    run(drives.load(a.drive), a.ego_only, a.start, a.duration)
+    drv = drives.load(a.drive)
+    if a.colab:
+        run_colab(drv, a.detector or "rtdetr2", not a.no_reid, a.reuse)
+    else:
+        run(drv, a.ego_only, a.start, a.duration, detector=a.detector or "yolo",
+            reid=not a.no_reid and a.device != "cpu", device=a.device)
 
 
 if __name__ == "__main__":

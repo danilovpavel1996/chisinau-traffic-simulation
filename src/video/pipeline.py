@@ -3,7 +3,7 @@ pipeline.py
 -----------
 Run every step for one drive, in order:
 
-    perception   video → detections.parquet, ego.parquet          (slow: ~2× video length on CPU)
+    perception   video → detections.parquet, ego.parquet: RT-DETRv2 + BoT-SORT (Google Colab GPU)
     overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
     scene        → scene.parquet + scene_dense.parquet: crosswalks, lane markings, curbs… (Google Colab GPU)
@@ -41,9 +41,9 @@ def run_step(step: str, drv: dict):
     if step == "overlay":
         from src.video import overlay
         overlay.run(drv)
-    elif step == "perception":
+    elif step == "perception":                # > 5 min on the laptop → free Colab GPU
         from src.video import perception
-        perception.run(drv)
+        perception.run_colab(drv)
     elif step == "traffic":
         from src.video import traffic
         traffic.run(drv)

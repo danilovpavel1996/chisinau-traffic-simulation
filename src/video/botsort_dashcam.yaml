@@ -1,0 +1,14 @@
+# BoT-SORT for dashcam footage sampled at 5 fps (every 6th frame of 30 fps).
+# Detectors run at conf=0.1 so occluded / distant cars reach the low-score stage.
+tracker_type: botsort
+track_high_thresh: 0.3   # first-stage matches
+track_low_thresh: 0.1    # second stage: rescues partially occluded cars
+new_track_thresh: 0.45   # stricter births → fewer short-lived fragment tracks
+track_buffer: 50         # ~10 s at 5 fps: survive occlusion by trolleybuses
+match_thresh: 0.85       # lenient association (the camera moves between samples)
+fuse_score: True
+gmc_method: sparseOptFlow   # camera-motion compensation: our own car moves and turns
+proximity_thresh: 0.5    # ReID only between boxes that overlap at least this much
+appearance_thresh: 0.8   # minimum appearance similarity to re-identify
+with_reid: True          # appearance embeddings: same car after an occlusion keeps its ID
+model: yolo26s-reid.onnx # Ultralytics re-identification model (downloaded on first use)
