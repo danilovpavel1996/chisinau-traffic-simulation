@@ -171,11 +171,15 @@ class Geometry:
         self.top, self.step = int(dense_row.top), int(dense_row.step)
         self.shape = json.loads(dense_row.mask_shape)
         # one class-map index per BEV cell (same for every frame)
-        W = int((X_RANGE[1] - X_RANGE[0]) * PX_PER_M)
-        H = int((Z_RANGE[1] - Z_RANGE[0]) * PX_PER_M)
-        self.size = (W, H)
-        X = X_RANGE[0] + (np.arange(W) + 0.5) / PX_PER_M
-        Z = Z_RANGE[1] - (np.arange(H) + 0.5) / PX_PER_M
+        self.size, self.valid, self.r, self.c = self.grid()
+        self.z_min = self.fz * self.h / (self.bonnet - self.y_h)
+
+    def grid(self, px_per_m: float = PX_PER_M, x_range=X_RANGE, z_range=Z_RANGE):
+        """Ground cells (top = farthest) → class-map row / column, and which cells the camera sees."""
+        W = int((x_range[1] - x_range[0]) * px_per_m)
+        H = int((z_range[1] - z_range[0]) * px_per_m)
+        X = x_range[0] + (np.arange(W) + 0.5) / px_per_m
+        Z = z_range[1] - (np.arange(H) + 0.5) / px_per_m
         XX, ZZ = np.meshgrid(X, Z)
         with np.errstate(divide="ignore", invalid="ignore"):
             y = self.y_h + self.fz * self.h / ZZ
@@ -183,9 +187,8 @@ class Geometry:
             x, y = self.distort(x, y)
         r = np.floor((y - self.top) / self.step).astype(int)
         c = np.floor(x / self.step).astype(int)
-        self.valid = (ZZ > 0.5) & (y < self.bonnet) & (r >= 0) & (r < self.shape[0]) & (c >= 0) & (c < self.shape[1])
-        self.r, self.c = np.where(self.valid, r, 0), np.where(self.valid, c, 0)
-        self.z_min = self.fz * self.h / (self.bonnet - self.y_h)
+        valid = (ZZ > 0.5) & (y < self.bonnet) & (r >= 0) & (r < self.shape[0]) & (c >= 0) & (c < self.shape[1])
+        return (W, H), valid, np.where(valid, r, 0), np.where(valid, c, 0)
 
     def distort(self, x, y):
         """Ideal (pinhole) pixel → where the lens puts it."""

@@ -40,7 +40,9 @@ method works.
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
 | **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ depth within ~7 % of GPS after calibration against the map |
 | **Camera self-calibration** (no specs, no GPS): field of view from map turns, depth from crosswalk approaches | ✅ dashcam "120°" measured as 99° (GPS check agrees); refuses when the evidence is inconsistent |
-| Dashboard: video · spatial view · map (GPS point and video-only point) | ✅ `data/video/dashboard.html` |
+| **Tesla-style 3D surround view**: road, lane markings, vehicles, traffic lights around the car | ✅ first version (2026-10-23) |
+| Distances in metres (no camera specs, no GPS positions) | ✅ scale from parked cars + the dashcam's speed; lens from GeoCalib; depth fitted to the road: crosswalks vs GPS 0.99 |
+| Dashboard: video · spatial view (3D / plan + map) · map (GPS point and video-only point) | ✅ best opened with the local viewer (`python -m src.video.dashboard.serve --open`) |
 
 ### Models and data sources — what detects what
 
@@ -152,11 +154,12 @@ In priority order. Review and reorder this list as priorities change.
 1. **Junction detection in daylight, through the spatial view** — the current
    bottleneck. About half of the junctions show no cue or only a weak "side street
    opens" cue, so the alignment skips them.
-   1. ~~*Calibrate the depth scale against the map*~~ — done (2026-10-23): field of view
-      from map turns, depth from crosswalk approaches; depth within ~7 % of GPS.
-   1b. *Tesla-style surround view*: one rendered scene of the road around the car — road
-      edges, lane lines, crosswalks, other vehicles as 3D boxes where they are — replacing
-      the flat "ahead" plan. (A straightened strip of the whole drive was tried and dropped
+   1. ~~*Distances in metres*~~ — done (2026-10-23): scale and horizon from parked cars and
+      the dashcam's speed overlay, lens (focal length, distortion) from GeoCalib, Depth
+      Anything fitted onto the road plane; crosswalk distances vs GPS 0.99.
+   1b. ~~*Tesla-style surround view*~~ — first version done (2026-10-23): three.js scene with
+      the road, markings, vehicles (boxes) and traffic lights in their colour. Next: vehicle
+      headings from their tracks, smoother shapes, pedestrians. (A straightened strip of the whole drive was tried and dropped
       from the dashboard: `strip.py` stays as a possible detector input.)
    2. *Review together*: you watch the spatial view and mark where a junction or
       feature is missed; that drives the detector.
@@ -216,7 +219,10 @@ src/
     roads.py, truth.py   OpenStreetMap street graph; truth route from driving directions
     position.py          where the car is every second, on OSM streets
     calibrate.py         camera self-calibration against the map (field of view, depth)
+    ground.py, lens.py   distance scale (parked cars + speed), lens (GeoCalib)
+    depth.py             depth for every pixel (Depth Anything V2), fitted to the road plane
     bev.py               spatial view: what the camera sees vs what the map expects
+    surround.py          data for the Tesla-style 3D view
     strip.py             (not in the pipeline) the drive stitched into one straightened strip
     lanes.py, signs.py   lanes; street names / named places read in the video
     street_stats.py      stops, queues before signals, speeds per street (+ all drives)

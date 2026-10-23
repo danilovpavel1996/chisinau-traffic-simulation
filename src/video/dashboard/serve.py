@@ -5,8 +5,11 @@ Tiny local web server for the dashboard, with HTTP Range support so the
 video can be seeked (python -m http.server cannot do that).
 
 Usage:
-    .venv-video/bin/python -m src.video.dashboard.serve [--port 8765]
+    .venv-video/bin/python -m src.video.dashboard.serve [--port 8765] [--open]
     → http://localhost:8765/dashboard.html
+
+Needed for the 3D surround view's road surface: a page opened straight from disk
+(file://) may not hand a video to WebGL (Chrome treats it as cross-origin).
 """
 
 from __future__ import annotations
@@ -58,9 +61,13 @@ class RangeHandler(SimpleHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8765)))
+    ap.add_argument("--open", action="store_true", help="open the dashboard in the default browser")
     a = ap.parse_args()
     httpd = ThreadingHTTPServer(("127.0.0.1", a.port), partial(RangeHandler, directory=ROOT))
-    print(f"serving {ROOT} on http://localhost:{a.port}/", flush=True)
+    print(f"serving {ROOT} on http://localhost:{a.port}/  →  http://localhost:{a.port}/dashboard.html", flush=True)
+    if a.open:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{a.port}/dashboard.html")
     httpd.serve_forever()
 
 

@@ -77,6 +77,8 @@ def build_data(drv: dict) -> dict:
                start_pin=drv.get("start"), dest_pin=drv.get("destination"))
     if (folder / "bev.mp4").exists():
         out["bev"] = f"processed/{drv['key']}/bev.mp4"
+    if (folder / "surround_data.js").exists():           # loaded by the page before the drive data
+        out["surround_js"] = f"processed/{drv['key']}/surround_data.js"
 
     # ground truth
     gps = drives.gps_track(drv)

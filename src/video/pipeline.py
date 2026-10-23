@@ -14,6 +14,7 @@ Run every step for one drive, in order:
     depth        → depth.parquet: distance to every pixel, Depth Anything V2 (Google Colab GPU)
     calibrate    → calibration.json: field of view + depth scale measured against the map; re-match
     bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
+    surround     → surround_ground.mp4, surround_data.js: the Tesla-style 3D view (road, vehicles, lights)
     position     → trace.parquet: where the car is every second (GPS if available, else the match)
     lanes        → lanes.parquet, lanes_by_street.csv
     signs        → text.parquet: street names and named places read in the video (no number plates)
@@ -34,7 +35,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "depth", "road", "events", "event_match", "calibrate", "bev", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "traffic", "scene", "depth", "road", "events", "event_match", "calibrate", "bev", "surround", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -61,6 +62,9 @@ def run_step(step: str, drv: dict):
     elif step == "bev":
         from src.video import bev
         bev.run(drv)
+    elif step == "surround":
+        from src.video import surround
+        surround.run(drv)
     elif step == "road":
         from src.video import road_geometry
         road_geometry.run(drv)
