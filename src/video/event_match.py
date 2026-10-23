@@ -491,7 +491,10 @@ def run(drv: dict):
                trace=dict(video_s=secs.tolist(), lat=np.round(lat, 6).tolist(), lon=np.round(lon, 6).tolist(),
                           d=np.round(d_s, 1).tolist(), kmh=video_kmh(secs, tt, mm, L).tolist()),
                route=dict(lat=np.round(s.attrs["pts"][:, 0], 6).tolist(), lon=np.round(s.attrs["pts"][:, 1], 6).tolist(),
-                          d=np.round(s.attrs["cum"], 1).tolist()),
+                          d=np.round(s.attrs["cum"], 1).tolist(), nodes=[int(n) for n in path]),
+               route_sites=[dict(d=round(float(r.d), 1), node=None if pd.isna(r.node) else int(r.node), turn=round(float(r.turn)),
+                           roundabout=bool(r.roundabout), junction=bool(r.junction), signal=bool(r.signal),
+                           crossing=bool(r.crossing)) for r in s.itertuples()],
                runner_up_cost=round(scored[1][0], 2) if len(scored) > 1 else None)
     out["evaluation"] = evaluate(drv, R, path, matched, secs, lat, lon, s)
     (drv["folder"] / "event_match.json").write_text(json.dumps(out, default=float))

@@ -77,6 +77,8 @@ def build_data(drv: dict) -> dict:
                start_pin=drv.get("start"), dest_pin=drv.get("destination"))
     if (folder / "bev.mp4").exists():
         out["bev"] = f"processed/{drv['key']}/bev.mp4"
+    if (folder / "strip.png").exists():
+        out["strip"] = dict(src=f"processed/{drv['key']}/strip.png", **json.loads((folder / "strip.json").read_text()))
 
     # ground truth
     gps = drives.gps_track(drv)
@@ -111,7 +113,7 @@ def build_data(drv: dict) -> dict:
         tr["bearing"] = (np.degrees(np.arctan2(dx, dy)) % 360).round(0)
         if "street" not in tr:
             tr["street"] = ""
-        keep = [c for c in ("video_s", "lat", "lon", "street", "speed_kmh", "bearing", "error_m") if c in tr]
+        keep = [c for c in ("video_s", "lat", "lon", "street", "speed_kmh", "bearing", "error_m", "d") if c in tr]
         out["match"] = dict(trace=tr[keep].to_dict(orient="list"), accuracy=m.get("accuracy"), km=m.get("km"),
                             method=m.get("method"), seed=m.get("seed"), dead_reckoning=m.get("dead_reckoning"),
                             reseeds=m.get("reseeds", []))

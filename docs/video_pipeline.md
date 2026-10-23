@@ -254,3 +254,13 @@ nearest visible ground is 4.3 m (the bonnet hides the rest).
 
 Seen in the spatial view at 10:08:32: Strada Domniței on the map (white, video-only position)
 lines up with the road surface opening on the right in the camera layer.
+
+## Stitched top-down strip (2026-10-23)
+
+`strip.py` paints, every 0.5 s, the sharpest band of the calibrated ground plan (from the
+nearest visible ground, 4.3 m, to +14 m) into one long strip at the video-only distance along
+the route; each 0.25 m cell keeps its most-seen class. With an 8 m band the strip had gaps at
+speed (0.5 s at 50 km/h = 7 m, and the anchored distance can run faster between anchors);
+14 m → ground seen along 99 % of 5.15 km, built in ~7 s. The map's side streets are stubs at
+the angle they leave the route. Where a curb gap and a stub are at different distances, the
+video-only position is off by that much — the starting point for a junction detector (next).
