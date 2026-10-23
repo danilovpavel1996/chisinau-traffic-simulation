@@ -284,3 +284,19 @@ calibrated from the map moved 99° → 105.5° because it depends on the route t
 same turn scale for both runs (1.56 / 1.57). One drive with 18 junctions swings ± 2 junctions
 with such knock-on effects — judging changes like this needs more daylight drives with GPS.
 The ReID model's GPU backend needs "cuda:0": with "cuda" it fell back to the CPU (3 s per frame).
+
+## Depth Anything V2 (metric outdoor, Large) — first check (2026-10-23)
+
+`depth.py` on Colab: 1,426 dense frames in 8.1 min. The *shape* is good (correlation 0.75 with
+the flat-road distance of cars ahead), the *metric scale* is not, and not uniform:
+depth / flat-road distance on road pixels straight ahead falls from 2.5 (0–10 m) to 1.7 (40 m);
+on crosswalk approaches depth / GPS = 1.25. Causes: the model was trained on ~80° driving
+cameras (Virtual KITTI), this dashcam is ~100°+ (things look smaller → farther), plus the bonnet
+and windscreen reflections near the bottom of the image.
+
+Found while checking: the ground geometry's own scale is unstable between runs (view / GPS 0.93
+in one run, 0.73 after re-running perception). The depth factor rests on only 2–3 crosswalk
+approaches per drive, where the video odometer's local error (± 20–30 % over a short stretch)
+goes straight into the scale. Needed: a camera model calibrated from the video's geometry itself
+(lens distortion from straight lines, focal length from vanishing points), then depth fitted onto
+that ground geometry.
