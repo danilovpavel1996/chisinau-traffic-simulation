@@ -46,10 +46,10 @@ method works.
 
 | Data | Model / method | Runs where | Notes |
 |---|---|---|---|
-| Cars, buses, trucks, motorcycles, traffic lights (boxes) | **YOLO11s** (Ultralytics, COCO-trained) | laptop CPU | every 6th frame (5 per s); bonnet detections dropped |
-| Same vehicle across frames (track IDs) | **ByteTrack** (`bytetrack_dashcam.yaml`) | laptop | |
+| Cars, buses, trucks, motorcycles, traffic lights (boxes) | **RT-DETRv2** (ResNet-101, COCO-trained; YOLO11s on the laptop) | **Google Colab T4** | every 6th frame (5 per s); ~2× the vehicles YOLO found |
+| Same vehicle across frames (track IDs) | **BoT-SORT** with camera-motion compensation and re-identification (`botsort_dashcam.yaml`, yolo26s-reid) | Colab T4 | |
 | Traffic light colour | colour heuristic (brightest saturated hue in the box) | laptop | daylight only in practice |
-| Own motion: moving / stopped, speed, rotation, horizon | **optical flow** (OpenCV Lucas–Kanade, sparse corners) | laptop | speed: flow between adjacent frames; rotation: over 0.2 s |
+| Own motion: moving / stopped, speed, rotation, horizon | **optical flow** (OpenCV Lucas–Kanade, sparse corners) | Colab (with detection) | speed: flow between adjacent frames; rotation: over 0.2 s |
 | Other vehicles: parked / oncoming / same direction / crossing | **dense optical flow** (OpenCV Farneback): box motion vs road under it | laptop | |
 | Crosswalks, lane markings, curbs, road, sidewalk, guard rails, poles, barriers | **Mask2Former Swin-L, Mapillary Vistas** (Meta, via Hugging Face) | free **Google Colab T4 GPU** (~2 min per drive), laptop fallback | weights licensed for non-commercial use (CC BY-NC) — fine here, see Licensing |
 | Road width, side streets opening on the right | geometry on the segmentation maps (half-width ÷ distance below horizon) | laptop | camera-independent |
@@ -71,9 +71,10 @@ would take more than ~5 min on the laptop run on Google Colab);
    dashcam has a GPS fix. Misread digits (a 0 read as a 6 puts the car 1 km away)
    are dropped against the rolling median track. Used for evaluation and for traffic
    measures; skipped for videos without an overlay.
-2. **perception** (`perception.py`). YOLO + ByteTrack + optical flow on every 6th
-   frame → `detections.parquet` (boxes, tracks, light colour, box motion) and
-   `ego.parquet` (own motion signals). Slowest step: ~1–2× the video length on the CPU.
+2. **perception** (`perception.py --colab`). RT-DETRv2 + BoT-SORT (re-identification) +
+   optical flow on every 6th frame, on a Colab T4 (~2.5× the video length; the video is
+   uploaded in 25 MB parts, the job runs detached and is polled) → `detections.parquet`
+   (boxes, tracks, light colour, box motion) and `ego.parquet` (own motion signals).
 3. **traffic** (`traffic.py`, `motion.py`). Own motion becomes moving / stopped, speed
    index, turns and stops. Vehicle tracks are labelled (oncoming, parked, same
    direction, crossing, overtaking) → `tracks.parquet`, `per_minute.csv`, `timeline.png`.

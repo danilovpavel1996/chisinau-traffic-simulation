@@ -264,3 +264,23 @@ speed (0.5 s at 50 km/h = 7 m, and the anchored distance can run faster between 
 14 m → ground seen along 99 % of 5.15 km, built in ~7 s. The map's side streets are stubs at
 the angle they leave the route. Where a curb gap and a stub are at different distances, the
 video-only position is off by that much — the starting point for a junction detector (next).
+
+## Detector upgrade: RT-DETRv2 + BoT-SORT with ReID, on Colab (2026-10-23)
+
+Same drive (2026_10_23_10_06), street window, YOLO11s + ByteTrack (laptop) vs RT-DETRv2-R101 +
+BoT-SORT with camera-motion compensation and yolo26s-reid (Colab T4, 32 min for 12 min of video):
+
+| | YOLO11s + ByteTrack | RT-DETRv2 + BoT-SORT/ReID |
+|---|---|---|
+| vehicles per frame | 6.1 | **11.4** (near cars YOLO missed, distant traffic, parked rows) |
+| vehicle tracks ≥ 10 frames | 370 | **793** |
+| close traffic-light clusters | 2 (1 false: red leaves through rain) | 7: 3 at OSM signals, a real pedestrian light missing from OSM (259 s, 0.82), 1 false (a trolleybus's lit route number, 0.39) |
+| moving / stopped vs GPS (flow re-run on Colab) | 92 % | 90 % |
+| speed correlation with GPS | 0.51 | 0.46 |
+
+Localisation did not measurably change: physical junctions at the right moment 44 → 39 %,
+position within 30 m at junction moments 50 → 33 % (one or two junctions of 18). The lens
+calibrated from the map moved 99° → 105.5° because it depends on the route timing; GPS gives the
+same turn scale for both runs (1.56 / 1.57). One drive with 18 junctions swings ± 2 junctions
+with such knock-on effects — judging changes like this needs more daylight drives with GPS.
+The ReID model's GPU backend needs "cuda:0": with "cuda" it fell back to the CPU (3 s per frame).
