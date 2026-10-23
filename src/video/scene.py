@@ -16,6 +16,7 @@ Usage:
     .venv-video/bin/python -m src.video.scene download-model   # once, 826 MB
     .venv-video/bin/python -m src.video.scene <drive>          # on this Mac (~2.5 s/frame CPU)
     .venv-video/bin/python -m src.video.scene <drive> --colab   # free Colab T4 via the Colab CLI (~minutes)
+    .venv-video/bin/python -m src.video.scene <drive> --colab --dense   # 2 frames/s, fine class maps → bev.py
     .venv-video/bin/python -m src.video.scene <drive> --export-colab        # or by hand in the Colab web UI:
     .venv-video/bin/python -m src.video.scene <drive> --import ~/Downloads/scene.parquet
 
@@ -23,8 +24,13 @@ Output: data/video/processed/<drive>/scene.parquet — one row per analysed fram
 class shares of the image above the bonnet, crosswalk position (lowest row),
 and per scanline the left→right runs of (class, x0, x1) for lane/road analysis.
 
+--dense: scene_dense.parquet — DENSE_FPS frames per second over the whole video, each
+a class map of the lower image (from DENSE_TOP down, every DENSE_STEP-th pixel,
+zlib-compressed) — fine enough to project onto the ground for the spatial view
+(bev.py); the sparse class map (every 8th pixel) has ~1 row per 15 m at 40 m.
+
 Model: facebook/mask2former-swin-large-mapillary-vistas-semantic in models/
-(Mapillary Vistas: non-commercial licence — fine for research, revisit for a product).
+(Mapillary Vistas: non-commercial licence — fine for this personal project, see README → Licensing).
 """
 
 from __future__ import annotations
@@ -66,6 +72,9 @@ CLASSES = {            # Vistas label → short name stored in the output
     "Sky": "sky", "Person": "person", "Bicyclist": "person", "Motorcyclist": "person",
 }
 MASK_STEP = 8          # stored class map: every 8th pixel (960 px → 120 columns)
+DENSE_FPS = 2          # --dense: frames per second
+DENSE_STEP = 2         # --dense: class map every 2nd pixel
+DENSE_TOP = 0.35       # --dense: rows from this fraction of the image height down (the horizon is ~0.5)
 CODES = sorted(set(CLASSES.values())) + ["other"]     # class map value → short name
 
 
@@ -119,6 +128,22 @@ def describe(seg: np.ndarray, names: np.ndarray, t: float) -> dict:
     return r
 
 
+def describe_dense(seg: np.ndarray, names: np.ndarray, t: float) -> dict:
+    """One frame for the spatial view: compressed class map of the lower image."""
+    import zlib
+    code = {c: i for i, c in enumerate(CODES)}
+    lut = np.array([code.get(n, code["other"]) for n in names], dtype=np.uint8)
+    top = int(seg.shape[0] * DENSE_TOP)
+    small = lut[seg[top::DENSE_STEP, ::DENSE_STEP]]
+    return dict(t=float(t), width=seg.shape[1], height=seg.shape[0], top=top, step=DENSE_STEP,
+                mask=zlib.compress(small.tobytes(), 6), mask_shape=json.dumps(list(small.shape)))
+
+
+def dense_times(drv: dict) -> list[float]:
+    meta = json.loads((drv["folder"] / "meta.json").read_text())
+    return [round(t, 1) for t in np.arange(0, meta["end_s"], 1 / DENSE_FPS)]
+
+
 def run(drv: dict):
     limit_cpu()
     from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
@@ -163,7 +188,7 @@ def save(drv: dict, df: pd.DataFrame, seconds: float | None = None):
 
 
 # ── Google Colab (free GPU) ───────────────────────────────────────────────────
-def export_colab(drv: dict):
+def export_colab(drv: dict, dense: bool = False):
     """
     Write the model-input frames + a self-contained notebook for Colab:
     processed/<drive>/colab/{<drive>_frames.zip, scene_colab.ipynb}. The frames are
@@ -171,11 +196,11 @@ def export_colab(drv: dict):
     """
     import inspect
     import zipfile
-    times = candidate_times(drv)
+    times = dense_times(drv) if dense else candidate_times(drv)
     hood = drv["camera"]["hood"]
     out = drv["folder"] / "colab"
     out.mkdir(exist_ok=True)
-    zpath = out / f"{drv['key']}_frames.zip"
+    zpath = out / f"{drv['key']}_frames{'_dense' if dense else ''}.zip"
     cap = cv2.VideoCapture(str(drv["video"]))
     bar = progress(len(times), "exporting frames for Colab")
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
@@ -188,11 +213,10 @@ def export_colab(drv: dict):
                 z.writestr(f"{t:08.1f}.jpg", buf.tobytes())
             bar.update(1)
     bar.close()
-    code = "\n\n".join([
-        "import json\nimport numpy as np",
-        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}\n"
-        f"MASK_STEP = {MASK_STEP}\nCODES = {CODES!r}",
-        inspect.getsource(runs), inspect.getsource(describe)])
+    if dense:                                    # the Colab CLI route only (run_colab)
+        print(f"→ {zpath} ({zpath.stat().st_size / 1e6:.0f} MB, {len(times)} frames)")
+        return
+    code = remote_code()
     nb = notebook(drv["key"], zpath.name, code)
     (out / "scene_colab.ipynb").write_text(json.dumps(nb, indent=1))
     print(f"→ {zpath} ({zpath.stat().st_size / 1e6:.0f} MB, {len(times)} frames)\n→ {out / 'scene_colab.ipynb'}")
@@ -235,6 +259,17 @@ def notebook(key: str, zip_name: str, code: str) -> dict:
 
 
 COLAB = ROOT / ".venv-colab" / "bin" / "colab"     # official Google Colab CLI (own venv, Python ≥3.12)
+
+
+def remote_code(dense: bool = False) -> str:
+    """The constants and describe function shipped to Colab (`describe` = what is stored per frame)."""
+    import inspect
+    return "\n\n".join([
+        "import json, zlib\nimport numpy as np",
+        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}\n"
+        f"MASK_STEP = {MASK_STEP}\nCODES = {CODES!r}\nDENSE_STEP = {DENSE_STEP}\nDENSE_TOP = {DENSE_TOP}",
+        inspect.getsource(runs), inspect.getsource(describe), inspect.getsource(describe_dense),
+        "describe = describe_dense" if dense else ""])
 
 
 def remote_script(code: str) -> str:
@@ -288,23 +323,17 @@ def split(path: Path, folder: Path, mb: int) -> list[Path]:
     return parts
 
 
-def run_colab(drv: dict):
+def run_colab(drv: dict, dense: bool = False):
     """Segment on a free Colab T4 via the Colab CLI: upload frames → run → download → release the GPU."""
-    import inspect
     import shlex
     out = drv["folder"] / "colab"
-    zpath = out / f"{drv['key']}_frames.zip"
+    zpath = out / f"{drv['key']}_frames{'_dense' if dense else ''}.zip"
     if not zpath.exists():
-        export_colab(drv)
-    code = "\n\n".join([
-        "import json\nimport numpy as np",
-        f"WIDTH = {WIDTH}\nSCANLINES = {SCANLINES!r}\nCLASSES = {json.dumps(CLASSES, indent=4)}\n"
-        f"MASK_STEP = {MASK_STEP}\nCODES = {CODES!r}",
-        inspect.getsource(runs), inspect.getsource(describe)])
+        export_colab(drv, dense)
     job = out / "remote_scene.py"
-    job.write_text(remote_script(code))
-    result = out / "scene.colab.parquet"
-    session = "scene-" + drv["key"].replace("_", "-").lower()
+    job.write_text(remote_script(remote_code(dense)))
+    result = out / ("scene_dense.colab.parquet" if dense else "scene.colab.parquet")
+    session = ("dense-" if dense else "scene-") + drv["key"].replace("_", "-").lower()
 
     def colab(*args, check=True):
         cmd = [str(COLAB), "--auth", "oauth2", *args]
@@ -333,7 +362,12 @@ def run_colab(drv: dict):
     finally:
         print("releasing the GPU runtime…", flush=True)
         subprocess.run([str(COLAB), "--auth", "oauth2", "stop", "-s", session])
-    import_colab(drv, result)
+    if dense:
+        df = pd.read_parquet(result).sort_values("t")
+        df.to_parquet(drv["folder"] / "scene_dense.parquet", index=False)
+        print(f"→ {drv['folder'] / 'scene_dense.parquet'}: {len(df)} frames", flush=True)
+    else:
+        import_colab(drv, result)
     print(f"Colab segmentation done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
@@ -358,12 +392,13 @@ def main():
     ap.add_argument("--export-colab", action="store_true", help="write frames + notebook for Google Colab")
     ap.add_argument("--import", dest="imp", type=Path, help="scene.parquet downloaded from Colab")
     ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
+    ap.add_argument("--dense", action="store_true", help="with --colab: 2 frames/s class maps for the spatial view")
     a = ap.parse_args()
     if a.drive == "download-model":
         return download_model()
     drv = drives.load(a.drive)
     if a.colab:
-        run_colab(drv)
+        run_colab(drv, a.dense)
     elif a.export_colab:
         export_colab(drv)
     elif a.imp:

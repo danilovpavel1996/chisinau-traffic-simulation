@@ -195,3 +195,24 @@ on the morning drive, half show no video cue or only a right-side opening (weak,
 false ones), so the alignment skips them. Next: more junction cues in daylight (vehicles
 crossing ahead, side streets on both sides from curb / sidewalk gaps, stop lines), then
 refit the odometer scale between matched junctions — see README → Plan.
+
+## Spatial view, first version (2026-10-23)
+
+`bev.py` projects the dense segmentation (2 frames/s, Colab, 4.8 min for 12 min of video)
+onto the ground and draws the map's expectation on top, from the video-only pose
+(white) and, for evaluation, the GPS pose (thin green). Dashboard: video · spatial view · map.
+
+- **Horizon**: the motion-based focus of expansion sat ~25 px too high (row 252 vs 277 of
+  540) and projected the tree line as road 10–40 m ahead. Now: where the road ends straight
+  ahead on open road (10th percentile of the road's top row over straight driving).
+- **Upright classes** (cars, poles, signs, guard rails, buildings) smear into long streaks
+  when projected — in a bend the guard rail covered the road ahead. Only ground classes are
+  drawn; vehicles come from their detection boxes.
+- **Camera height** from car widths (1.8 m): 1.28 m (1,576 cars), lateral scale fine.
+- **Depth scale is off**: the nominal 120° pinhole gives too short a focal length — turn
+  angles from the video are ~1.5× (1.1–2.7×) the GPS ones, and a car ~15 m ahead is drawn
+  at ~8 m. Next: calibrate it against the map (ground motion between matched junctions =
+  their distance on OSM).
+- First use: at Columna × Henri Coandă (533 s) the camera sees a side street opening on the
+  right where the GPS-pose map has the junction, while the video-only-pose map shows a
+  straight street — the video-only position is behind there.

@@ -476,7 +476,10 @@ def run(drv: dict):
     out = dict(method="event-based route matching", cost=round(cost, 2), routes_considered=len(routes),
                route_km=round(L / 1000, 2), streets=[n for n in names if not n.startswith("(")],
                events=len(ev), sites=len(s), matched=matched,
-               trace=dict(video_s=secs.tolist(), lat=np.round(lat, 6).tolist(), lon=np.round(lon, 6).tolist()),
+               trace=dict(video_s=secs.tolist(), lat=np.round(lat, 6).tolist(), lon=np.round(lon, 6).tolist(),
+                          d=np.round(d_s, 1).tolist()),
+               route=dict(lat=np.round(s.attrs["pts"][:, 0], 6).tolist(), lon=np.round(s.attrs["pts"][:, 1], 6).tolist(),
+                          d=np.round(s.attrs["cum"], 1).tolist()),
                runner_up_cost=round(scored[1][0], 2) if len(scored) > 1 else None)
     out["evaluation"] = evaluate(drv, R, path, matched, secs, lat, lon, s)
     (drv["folder"] / "event_match.json").write_text(json.dumps(out, default=float))

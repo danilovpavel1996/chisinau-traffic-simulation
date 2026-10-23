@@ -6,11 +6,12 @@ Run every step for one drive, in order:
     perception   video → detections.parquet, ego.parquet          (slow: ~2× video length on CPU)
     overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
-    scene        → scene.parquet: crosswalks, lane markings, curbs, guard rails (~20 min)
+    scene        → scene.parquet + scene_dense.parquet: crosswalks, lane markings, curbs… (Google Colab GPU)
     localize     → match.json (video-only route on the map, accuracy vs truth / GPS)
     road         → road.parquet: road width + side-street openings from the class maps
     events       → events.parquet: junction events seen in the video (turns, roundabouts, crosswalks, signals)
     event_match  → event_match.json: video-only route from start + destination (event-based)
+    bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
     position     → trace.parquet: where the car is every second (GPS if available, else the match)
     lanes        → lanes.parquet, lanes_by_street.csv
     signs        → text.parquet: street names and named places read in the video (no number plates)
@@ -31,7 +32,8 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "position", "lanes", "signs", "streets", "dashboard"]
+STEPS = ["overlay", "perception", "traffic", "scene", "road", "events", "event_match", "bev", "position", "lanes", "signs",
+         "streets", "dashboard"]
 
 
 def run_step(step: str, drv: dict):
@@ -44,9 +46,13 @@ def run_step(step: str, drv: dict):
     elif step == "traffic":
         from src.video import traffic
         traffic.run(drv)
-    elif step == "scene":
+    elif step == "scene":                     # > 5 min on the laptop → free Colab GPU
         from src.video import scene
-        scene.run(drv)
+        scene.run_colab(drv)
+        scene.run_colab(drv, dense=True)
+    elif step == "bev":
+        from src.video import bev
+        bev.run(drv)
     elif step == "road":
         from src.video import road_geometry
         road_geometry.run(drv)

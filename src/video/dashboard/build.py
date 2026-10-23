@@ -5,6 +5,7 @@ One dashboard for all recorded drives: pick a drive, watch its video next to
 the map, in sync.
 
     video     + live overlay of detected vehicles / traffic lights
+    spatial   bird's-eye view: what the camera sees vs what the map expects (bev.py)
     map       ground truth (dashcam GPS or the driver's directions), the matched
               route drawing itself as the video plays, video-only dead-reckoned
               shape, OSM traffic signals and crossings, stops / turns /
@@ -72,7 +73,10 @@ def build_data(drv: dict) -> dict:
     out = dict(key=drv["key"], description=drv.get("description", ""), video=f"processed/{drv['key']}/{PROXY}",
                duration=dur, anchor=[lat0, lon0],
                clock=list(drives.clock(drv, secs).strftime("%H:%M:%S")),   # local wall clock per video second
-               street_window_s=drv.get("street_window_s", [0, dur]))
+               street_window_s=drv.get("street_window_s", [0, dur]),
+               start_pin=drv.get("start"), dest_pin=drv.get("destination"))
+    if (folder / "bev.mp4").exists():
+        out["bev"] = f"processed/{drv['key']}/bev.mp4"
 
     # ground truth
     gps = drives.gps_track(drv)
