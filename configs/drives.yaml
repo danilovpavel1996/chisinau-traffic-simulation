@@ -25,7 +25,7 @@
     end: [47.0397, 28.8036]         # Zity Mall (start = the video's GPS anchor)
 
 "2026_10_22_18_16":
-  video: data/video/raw/2026_10_22_18_16.mp4      # 10 dashcam clips joined (raw/2026_10_22_18_16/)
+  video: data/video/raw/2026_10_22_18_16.mp4      # 10 dashcam clips joined (original clips deleted 2026-10-23: the join is lossless)
   description: Office (Zity Mall) → home, dashcam (front camera), evening / dusk
   camera:
     hfov_deg: 120       # typical dashcam wide lens — to be calibrated against the GPS overlay
@@ -38,7 +38,7 @@
     height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth
 
 "2026_10_23_10_06":
-  video: data/video/raw/2026_10_23_10_06.mp4      # 4 dashcam clips joined (raw/2026_10_23_10_06/)
+  video: data/video/raw/2026_10_23_10_06.mp4      # 4 dashcam clips joined (original clips deleted 2026-10-23: the join is lossless)
   description: Home → office (Zity Mall), dashcam (front camera), morning / daylight
   camera:
     hfov_deg: 120
