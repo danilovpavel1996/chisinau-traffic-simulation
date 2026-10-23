@@ -51,3 +51,19 @@
   destination: [47.038970, 28.803540]               # Calea Ieșilor, where the car turns into Zity Mall
   overlay:
     height_px: 46
+
+"2026_10_23_19_26":
+  video: data/video/raw/2026_10_23_19_26.mp4      # 4 dashcam clips joined; the first (trimmed, HEVC) re-encoded to H.264
+  description: Bd. Moscova → Ciocana, dashcam (front camera), night / wet road
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # start on Bd. Moscova (first second of the video); destination where the car turns off the street
+  # network at Ion Dumeniuc × Mircea cel Bătrân (then ~180 m on an unmapped road, then parked);
+  # end time = start of that turn (left ~150°) in the video's own turn detection, not GPS
+  street_window_s: [0.5, 439.4]
+  start: [47.048367, 28.862917]
+  destination: [47.056500, 28.891382]
+  overlay:
+    height_px: 46

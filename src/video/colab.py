@@ -32,6 +32,7 @@ from src.video.drives import ROOT
 COLAB = ROOT / ".venv-colab" / "bin" / "colab"
 CHUNK_MB = 25            # the file API rejects single uploads above ~30 MB (HTTP 500)
 POLL_S = 30
+UPLOAD_TRIES = 3
 JOB, LOG, DONE = "/content/job.py", "/content/job.log", "/content/job.done"
 
 
@@ -85,7 +86,15 @@ class Session:
             for i in range(parts):
                 p = Path(tmp) / f"part_{i:04d}"
                 p.write_bytes(data[i * mb:(i + 1) * mb])
-                self.colab("upload", "-s", self.name, str(p), f"/content/{p.name}")
+                for attempt in range(UPLOAD_TRIES):          # a part can fail transiently
+                    if self.colab("upload", "-s", self.name, str(p), f"/content/{p.name}", check=False).returncode == 0:
+                        break
+                    if "@@alive" not in self.run("print('@@alive')", timeout=60):
+                        raise RuntimeError("the Colab runtime disconnected during the upload (free runtimes can be "
+                                           "reclaimed) — run again; consider a smaller file")
+                    time.sleep(5 * (attempt + 1))
+                else:
+                    raise RuntimeError(f"upload of {p.name} failed {UPLOAD_TRIES} times")
                 names.append(f"/content/{p.name}")
         self.run(f"""import os
 os.makedirs(os.path.dirname({remote!r}), exist_ok=True)

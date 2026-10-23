@@ -159,8 +159,12 @@ class Geometry:
         self.y_h = c["horizon_px"] if measured else horizon_from_road(drv, self.f)
         self.h = camera_height(drv, self.y_h, self.k)
         self.depth_scale = c.get("depth_scale", 1.0)
-        self.fz = c["ground_scale"] / self.h if measured else self.f * self.depth_scale
-        self.source = "parked cars + speed overlay" if measured else "map (turns, crosswalks)"
+        # fallbacks: GeoCalib's focal length (consistent day and night on this dashcam: 600 / 599 px),
+        # else the field of view × the crosswalk depth factor
+        lens_f = c.get("lens_focal_px")
+        self.fz = c["ground_scale"] / self.h if measured else lens_f if lens_f else self.f * self.depth_scale
+        self.source = ("parked cars + speed overlay" if measured else "GeoCalib focal length, horizon where the road ends"
+                       if lens_f else "map (turns, crosswalks)")
         self.cx = WIDTH / 2
         # lens distortion measured by GeoCalib (lens.py): x_d = c + (x_u − c)·(1 + k1·r²), r in
         # units of the focal length; barrel (k1 < 0) squeezes the image edges toward the centre

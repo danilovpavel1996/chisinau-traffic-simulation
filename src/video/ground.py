@@ -50,6 +50,8 @@ MIN_DRIVEN_M = 6         # … over at least this much driving
 EDGE = 0.01              # box touching the image border: its bottom is cut off
 MIN_R2 = 0.95            # a car "on a straight line"
 SEARCH_PX = 50           # horizon search range around the first guess
+CAMERA_HEIGHT_M = (0.9, 2.0)    # scale / GeoCalib focal length must be a dashcam's height above the road
+MAX_IQR_RATIO = 2.0      # cars must roughly agree (75th / 25th percentile of their scales)
 NEAR_PX = 25             # use box bottoms at least this far below the first-guess horizon (≲ 30 m):
                          # far cars barely move in the image while their box edges jitter ± 2 px
 SPLIT_PX = 4             # a parked car only comes closer: its bottom edge jumping up by more than
@@ -122,13 +124,36 @@ def fit(cars, y_guess: float) -> dict:
                 ground_median_r2=round(r2, 3))
 
 
+def plausible(res: dict, lens_focal: float | None) -> dict:
+    """
+    Reject a result no real dashcam could give. At night (2026_10_23_19_26) parked-car boxes
+    are loose (headlights, reflections): scale 4,839 with an interquartile range 3,561–7,178,
+    i.e. a camera 8 m above the road given GeoCalib's focal length (599 px).
+    """
+    if res.get("ground_status") != "calibrated":
+        return res
+    q1, q3 = res["ground_scale_iqr"]
+    why = []
+    if q3 / max(q1, 1e-9) > MAX_IQR_RATIO:
+        why.append(f"cars disagree (scales {q1:.0f}–{q3:.0f})")
+    if lens_focal:
+        h = res["ground_scale"] / lens_focal
+        res["ground_camera_height_m"] = round(h, 2)
+        if not CAMERA_HEIGHT_M[0] <= h <= CAMERA_HEIGHT_M[1]:
+            why.append(f"implies a camera {h:.1f} m above the road")
+    if why:
+        res["ground_status"] = "rejected: " + "; ".join(why)
+    return res
+
+
 def run(drv: dict) -> dict:
     from src.video.bev import horizon_from_road
     f = (WIDTH / 2) / np.tan(np.radians(drv["camera"]["hfov_deg"] / 2))
     y_guess = horizon_from_road(drv, f)
-    res = fit(parked_cars(drv, y_guess), y_guess) if drives.gps_track(drv) is not None \
-        else dict(ground_status="no speed overlay")
     cal = drv["folder"] / "calibration.json"
+    lens_focal = (json.loads(cal.read_text()) if cal.exists() else {}).get("lens_focal_px")
+    res = plausible(fit(parked_cars(drv, y_guess), y_guess), lens_focal) if drives.gps_track(drv) is not None \
+        else dict(ground_status="no speed overlay")
     c = {k: v for k, v in (json.loads(cal.read_text()) if cal.exists() else {}).items() if not k.startswith("ground")}
     c.update(res)
     cal.write_text(json.dumps(c, indent=2))

@@ -140,6 +140,7 @@ works partly in daylight and fails at night; it is no longer in the default pipe
 | `2026_10_22_10_21AM` home → Zity Mall, ~5 km | iPhone | day | no (truth = Google directions) | full correct route (99 % of it, all within 30 m); clear margin over the runner-up |
 | `2026_10_22_18_16` Zity Mall → home, 7 km | dashcam | dusk / night | yes | 81 % of junctions on the chosen route; 0 % at the right moment |
 | `2026_10_23_10_06` home → Zity Mall, same route, ~5 km | dashcam | day | yes | right route (20 of 21 junctions on it); 44 % of junctions at the right moment; position within 30 m at 50 % of junction moments; median error 59 m; lens calibrated 120° → 99°. Pins: after the U-turn on Mircești → the turn into the mall |
+| `2026_10_23_19_26` Bd. Moscova → Ciocana, 3.5 km | dashcam | **night**, wet road | yes | **right route** (identical to GPS; 11 of 12 junctions on it); 33 % of junctions at the right moment; median position error 76 m. Distances vs GPS 1.01 (GeoCalib focal length; parked cars rejected at night) |
 
 Measured on the evening dashcam drive against GPS: 56 % of junctions get a video cue;
 crosswalk precision 83 %; all 5 real turns caught, plus 6 false turns. On the morning

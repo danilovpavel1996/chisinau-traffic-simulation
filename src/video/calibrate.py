@@ -107,12 +107,14 @@ def run(drv: dict, rematch: bool = True) -> dict:
     """Always estimated from a match made with the nominal lens, so results don't depend on
     an earlier calibration; then events and the matching are re-run with the calibrated one."""
     from src.video import event_match, events
-    (drv["folder"] / "calibration.json").unlink(missing_ok=True)
+    cal = drv["folder"] / "calibration.json"
+    lens = {k: v for k, v in json.loads(cal.read_text()).items() if k.startswith("lens_")} if cal.exists() else {}
+    cal.unlink(missing_ok=True)                  # GeoCalib's lens (lens.py) is measured separately: kept
     drv = drives.load(drv["key"])
     if rematch:
         events.run(drv)
         event_match.run(drv)
-    res = estimate(drv)
+    res = dict(estimate(drv), **lens)
     (drv["folder"] / "calibration.json").write_text(json.dumps(res, indent=2))
     detail = res.get("reason") or f"{res['windows']} windows, slope {res['slope']}, {res['agree']:.0%} agree"
     print(f"→ {drv['folder'] / 'calibration.json'}: {res['status']}, field of view {res['hfov_nominal']}° → "
@@ -128,8 +130,8 @@ def run(drv: dict, rematch: bool = True) -> dict:
             from src.video import ground
             res.update(ground.run(drives.load(drv["key"])))
         if (drv["folder"] / "depth.parquet").exists():   # depth in metres, fitted to the road geometry
-            from src.video import depth
-            res.update(depth.fit_to_ground(drives.load(drv["key"])))
+            from src.video import depth as depth_model     # not `depth`: that is this module's function
+            res.update(depth_model.fit_to_ground(drives.load(drv["key"])))
         print(f"   depth: {res['depth_status']}" + (f", factor {res['depth_scale']}" if "depth_scale" in res else "")
               + f" ({res['depth_frames']} crosswalk-approach frames)", flush=True)
     return res

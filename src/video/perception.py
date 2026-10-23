@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -420,6 +421,23 @@ SHIP = ["src/video/__init__.py", "src/video/perception.py", "src/video/compute.p
 OUTPUTS = ["detections.parquet", "ego.parquet", "meta.json"]
 
 
+def upload_copy(drv: dict) -> Path:
+    """
+    A ~3× smaller copy of the video for the upload: same 1080p frames and frame numbers (so
+    every time and pixel measured stays the same), stronger H.264 compression. A 1.3 GB upload
+    takes ~10 min, long enough for a free Colab runtime to be reclaimed half-way (2026_10_23_19_26).
+    Encoded with 4 threads at low priority: slower, but the laptop stays quiet.
+    """
+    out = drv["folder"] / "colab" / f"{drv['key']}_upload.mp4"
+    if not out.exists():
+        out.parent.mkdir(exist_ok=True)
+        print(f"compressing the video for upload → {out.name}…", flush=True)
+        subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-stats", "-y", "-i", str(drv["video"]), "-map", "0:v:0",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "4", "-pix_fmt", "yuvj420p",
+                        "-vsync", "passthrough", "-an", str(out)], check=True)
+    return out
+
+
 def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bool = False):
     """The same perception code on a Colab T4: ship code + video, run detached, fetch the outputs."""
     import io
@@ -438,10 +456,11 @@ def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bo
     code.parent.mkdir(exist_ok=True)
     code.write_bytes(buf.getvalue())
     video_rel = drv["video"].relative_to(ROOT)
+    small = upload_copy(drv)
     t0 = time.time()
     with Session(f"perception-{key}", reuse=reuse) as s:
         s.upload(code, "/content/repo/code.zip")
-        s.upload(drv["video"], f"/content/repo/{video_rel}")
+        s.upload(small, f"/content/repo/{video_rel}")
         s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
         s.start(f"""import subprocess, sys, zipfile
 zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo")

@@ -338,3 +338,22 @@ centre line).
 per drive, fitted on 719,000 road pixels 6–35 m ahead (calibrated flat-road distances):
 model depth = 2.21 · Z^0.887. Independent checks: crosswalk distances from depth alone vs GPS
 **0.99** (IQR 0.95–1.11); traffic lights **4.3 m** above the road (IQR 3.9–6.4) — realistic.
+
+## Second night drive — 2026_10_23_19_26 (Bd. Moscova → Ciocana, 2026-10-23)
+
+Four dashcam clips, the first trimmed by the driver and re-saved as HEVC: re-encoded to H.264 and
+joined through MPEG-TS (in-band parameter sets), 632 s, decodes cleanly. The first Colab upload
+(1.3 GB, 54 parts) died when the free runtime was reclaimed half-way: uploads now retry per part,
+and perception uploads a compressed copy (same 18,967 frames, ~⅓ the size).
+
+- **Route (video only): identical to GPS** — Bd. Moscova → Studenților → Mihail Sadoveanu →
+  Profesor Ion Dumeniuc; 11 of 12 junctions on it; 33 % of junctions at the right moment (the
+  first night drive: 0 %); median position error 76 m. Pins: start on Bd. Moscova at 0 s, end where
+  the car turns off the street network (439.4 s, from the video's own turn detection).
+- **Lens (GeoCalib) is stable day and night**: focal 598.7 px / k1 −0.243 vs 599.5 / −0.241 in the
+  morning — same dashcam, same answer.
+- **Parked-car scale fails at night** (loose boxes: headlights, reflections): 4,839, i.e. a camera
+  8 m above the road. Now rejected by a plausibility check (scale / GeoCalib focal = camera height
+  0.9–2.0 m; cars agreeing within 2×); fallback: GeoCalib focal length + horizon where the road
+  ends + camera height from car widths (1.23 m). Crosswalk distances vs GPS: **1.01**
+  (15 frames). Turn-based lens calibration correctly refused (night windows inconsistent).
