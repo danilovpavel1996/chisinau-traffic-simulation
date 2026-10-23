@@ -40,6 +40,19 @@ def ego_states(ego: pd.DataFrame, W: int, hfov: float = HFOV_DEG, hood: float = 
     win = max(3, int(round(1.0 / dt)) | 1)            # odd number of samples ≈ 1 s
     smooth = lambda s: s.rolling(win, center=True, min_periods=1).median()
 
+    if "yaw_slope" in e:
+        # The road strip above the bonnet often has < 10 trackable points (smooth
+        # asphalt, a vehicle close ahead): 35 % of frames at > 15 km/h on 2026_10_23,
+        # and a missing value read as "stopped" froze the odometer. The forward
+        # expansion of the whole scene (yaw_slope) is never missing and separates
+        # stopped / moving ~2000× — fill the gaps with it, scaled by this drive's own
+        # ratio between the two (no camera constants, no GPS).
+        both = e.ego_mag.notna() & e.yaw_slope.notna() & (e.ego_mag > 0.6)
+        if both.sum() > 50:
+            k = float(np.median(e.ego_mag[both] / e.yaw_slope[both].abs().clip(lower=1e-3)))
+            e["ego_mag_measured"] = e.ego_mag.notna()
+            e["ego_mag"] = e.ego_mag.fillna(e.yaw_slope.abs() * k)
+
     e["moving"] = smooth(e.ego_mag) > max(0.6, 0.1 * np.nanpercentile(smooth(e.ego_mag), 95))
 
     focal = (W / 2) / np.tan(np.radians(hfov / 2))

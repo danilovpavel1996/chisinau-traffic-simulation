@@ -144,3 +144,32 @@ def test_event_alignment_prefers_the_matching_route():
     right, _ = align(ev, sites(+88.0), m_ev, total)
     left, _ = align(ev, sites(-88.0), m_ev, total)
     assert right < left                      # the route with the right turn explains the video better
+
+
+def test_overlay_clean_drops_repeated_misreads():
+    import pandas as pd
+    from datetime import datetime, timedelta
+    from src.video.overlay import clean
+    t = list(range(60))
+    lat = [47.05 + 0.00005 * i for i in t]                     # ~5.5 m/s straight north
+    for i in range(30, 34):                                     # 0↔6 misread repeated 4 s: ~1 km off
+        lat[i] += 0.0099
+    df = pd.DataFrame(dict(video_s=t, lat=lat, lon=[28.8] * 60,
+                           clock=[datetime(2026, 10, 23, 10) + timedelta(seconds=i) for i in t]))
+    out = clean(df)
+    assert out.bad[30:34].all() and not out.bad[:30].any() and not out.bad[34:].any()
+
+
+def test_event_alignment_survives_unknown_way_out_of_the_start():
+    import numpy as np
+    import pandas as pd
+    from src.video.event_match import align
+    # the car drove 800 m (a yard, a U-turn) before reaching the route: odometer is +800 m throughout
+    ev = pd.DataFrame(dict(t=[10.0, 40.0, 70.0], turn_deg=[90, 0, -90], roundabout=[False] * 3,
+                           crosswalk=[False, True, False], signal=[False] * 3, cues=["turn", "crosswalk", "turn"]))
+    s = pd.DataFrame(dict(d=[300.0, 1000.0, 1700.0], node=[1, 2, 3], turn=[88.0, 0.0, -85.0], roundabout=[False] * 3,
+                          junction=[True] * 3, signal=[False] * 3, crossing=[False, True, False]))
+    s.attrs["length"] = 2000.0
+    m_ev = np.array([1100.0, 1800.0, 2500.0])                   # odometer; total 2800 (800 m extra)
+    _, pairs = align(ev, s, m_ev, 2800.0)
+    assert pairs == [(0, 0), (1, 1), (2, 2)]

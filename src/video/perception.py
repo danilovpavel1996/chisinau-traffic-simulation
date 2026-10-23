@@ -118,6 +118,13 @@ class SceneFlow:
     per box   flow of the vehicle vs flow of the road surface just below it;
               a parked car moves exactly like the ground it stands on (residual ≈ 0)
 
+    The speed signals (ego_mag, bandN_dy) are measured between the sampled frame
+    and the frame just before it, × the stride (same units): across a whole
+    stride (0.2 s) the road near the car moves further than the tracker can
+    follow above ~50 km/h, and speed saturated (60–80 km/h looked like 30).
+    Rotation and the horizon stay on the full stride — over one frame the
+    rotation is 6× smaller than the tracking noise and fake turns appeared.
+
     The bottom `hood` fraction of the frame (dashboard / bonnet) is ignored.
     """
 
@@ -168,7 +175,9 @@ class SceneFlow:
                             bg_dx=float(mb[0]), bg_dy=float(mb[1])))
         return out
 
-    def update(self, frame: np.ndarray, boxes: list[tuple[int, int, int, int]]):
+    def update(self, frame: np.ndarray, boxes: list[tuple[int, int, int, int]],
+               before: np.ndarray | None = None, gap: int = 1):
+        """before: the video frame just before this one (speed flow over 1 frame, × gap)."""
         gray = cv2.cvtColor(cv2.resize(frame, (self.w, self.h)), cv2.COLOR_BGR2GRAY)
         ego = dict(ego_mag=np.nan, yaw_dx=np.nan, yaw_slope=np.nan, foe_y=np.nan,
                    **{f"band{i}_dy": np.nan for i in range(N_BANDS)})
@@ -178,34 +187,39 @@ class SceneFlow:
             return ego, per_box
 
         prev, self.prev = self.prev, gray
-        mask = np.zeros_like(gray)
-        mask[:int(self.hood_y)] = 255
-        pts = cv2.goodFeaturesToTrack(prev, maxCorners=1200, qualityLevel=0.01,
-                                      minDistance=5, mask=mask)
-        if pts is None or len(pts) < 20:
-            return ego, per_box
-        nxt, st, _ = cv2.calcOpticalFlowPyrLK(prev, gray, pts, None)
-        good = st.ravel() == 1
-        p, d = nxt[good].reshape(-1, 2), (nxt[good] - pts[good]).reshape(-1, 2)
-        x, y = p[:, 0], p[:, 1]
-
         s = self.scale
         sb = [(x1 * s, y1 * s, x2 * s, y2 * s) for x1, y1, x2, y2 in boxes]
-        in_any = np.zeros(len(p), bool)
-        for x1, y1, x2, y2 in sb:
-            in_any |= (x >= x1) & (x <= x2) & (y >= y1) & (y <= y2)
-        bg = ~in_any
+        mask = np.zeros_like(gray)
+        mask[:int(self.hood_y)] = 255
+
+        def track(ref, k):
+            """Background corner flow ref → this frame (× k): positions, displacements, mask."""
+            pts = cv2.goodFeaturesToTrack(ref, maxCorners=1200, qualityLevel=0.01, minDistance=5, mask=mask)
+            if pts is None or len(pts) < 20:
+                return None
+            nxt, st, _ = cv2.calcOpticalFlowPyrLK(ref, gray, pts, None)
+            good = st.ravel() == 1
+            p, d = nxt[good].reshape(-1, 2), (nxt[good] - pts[good]).reshape(-1, 2) * k
+            in_any = np.zeros(len(p), bool)
+            for x1, y1, x2, y2 in sb:
+                in_any |= (p[:, 0] >= x1) & (p[:, 0] <= x2) & (p[:, 1] >= y1) & (p[:, 1] <= y2)
+            return p, d, ~in_any
+
+        full = track(prev, 1.0)
+        if full is None:
+            return ego, per_box
+        near = full
+        if before is not None:
+            near = track(cv2.cvtColor(cv2.resize(before, (self.w, self.h)), cv2.COLOR_BGR2GRAY), float(gap)) or full
+
+        p, d, bg = near                                    # speed: one-frame flow
+        x, y = p[:, 0], p[:, 1]
 
         # road band: 30% of frame height just above the bonnet line
         road = (bg & (y > self.hood_y - 0.3 * self.h) & (y < self.hood_y)
                 & (x > self.w * 0.15) & (x < self.w * 0.85))
         if road.sum() >= 10:
             ego["ego_mag"] = float(np.median(np.linalg.norm(d[road], axis=1)) / s)
-        scene = bg & (y > self.h * 0.02) & (y < self.hood_y)
-        if scene.sum() >= 20:
-            r, slope = robust_line((x[scene] - self.w / 2) / self.w, d[scene, 0])
-            ego["yaw_dx"], ego["yaw_slope"] = r / s, slope / s
-
         # ground-plane speed: vertical flow of central (lane) points per image row band;
         # analyze.py divides by (row − horizon)² → speed independent of street width
         centre = bg & (x > self.w * 0.3) & (x < self.w * 0.7)
@@ -214,6 +228,13 @@ class SceneFlow:
             sel = centre & (y >= edges[i]) & (y < edges[i + 1])
             if sel.sum() >= 5:
                 ego[f"band{i}_dy"] = float(np.median(d[sel, 1]) / s)
+
+        p, d, bg = full                                    # rotation + horizon: full-stride flow
+        x, y = p[:, 0], p[:, 1]
+        scene = bg & (y > self.h * 0.02) & (y < self.hood_y)
+        if scene.sum() >= 20:
+            r, slope = robust_line((x[scene] - self.w / 2) / self.w, d[scene, 0])
+            ego["yaw_dx"], ego["yaw_slope"] = r / s, slope / s
         ego["foe_y"] = foe_row(p, d, bg) / s
         if sb:
             per_box = self._box_motion(prev, gray, sb)
@@ -248,11 +269,13 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
     det_rows, ego_rows = [], []
     t0 = time.time()
     f = f_start
+    last = None                                         # the decoded frame before the current one
     bar = progress((f_end - f_start + stride - 1) // stride, "perception" + (" (motion only)" if ego_only else ""))
     while f < f_end:
         ok, frame = cap.read()
         if not ok:
             break
+        before, last = last, frame
         if (f - f_start) % stride:
             f += 1
             continue
@@ -262,7 +285,7 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
         if saved is not None:
             g = saved.get(f)
             veh = [] if g is None else g[g.cls.isin(VEHICLE_CLASSES)][["x1", "y1", "x2", "y2"]].to_numpy()
-            ego, _ = flow.update(frame, [tuple(b) for b in veh])
+            ego, _ = flow.update(frame, [tuple(b) for b in veh], before, stride)
             ego_rows.append(dict(frame=f, t=t, **ego))
             bar.update(1)
             f += 1
@@ -287,7 +310,7 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
 
         # flow on the clean frame, before anything is drawn on it
         veh = [r for r in rows if r["cls"] in VEHICLE_CLASSES]
-        ego, per_box = flow.update(frame, [(r["x1"], r["y1"], r["x2"], r["y2"]) for r in veh])
+        ego, per_box = flow.update(frame, [(r["x1"], r["y1"], r["x2"], r["y2"]) for r in veh], before, stride)
         for r, m in zip(veh, per_box):
             r.update(m or {})
         det_rows.extend(rows)

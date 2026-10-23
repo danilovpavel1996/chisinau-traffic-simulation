@@ -36,3 +36,16 @@
   destination: [47.058783, 28.813900]   # (= last GPS fix, home)
   overlay:
     height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth
+
+"2026_10_23_10_06":
+  video: data/video/raw/2026_10_23_10_06.mp4      # 4 dashcam clips joined (raw/2026_10_23_10_06/)
+  description: Home → office (Zity Mall), dashcam (front camera), morning / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  street_window_s: [100, 625]                       # from GPS: leaves home / reaches Zity Mall (150 m)
+  start: [47.058767, 28.814100]                     # first GPS fix (home)
+  destination: [47.039350, 28.803150]               # last GPS fix (Zity Mall)
+  overlay:
+    height_px: 46

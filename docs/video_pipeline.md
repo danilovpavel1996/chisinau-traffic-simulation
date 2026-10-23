@@ -165,3 +165,33 @@ Measured cues (evening drive vs GPS): right-side openings precision 50 % (chance
 left side ≈ chance (opposite carriageway); cross traffic at night 33 % (chance 22 %) — not used.
 Road width (half-width ÷ distance below the horizon, from the class maps) orders boulevards
 vs side streets within a video; queued cars inflate it.
+
+## First daylight dashcam drive — 2026_10_23_10_06 (2026-10-23)
+
+Home → Zity Mall, the same route as the phone drive, dashcam with GPS overlay
+(answer key). First run: the right route lost to a wrong one (via Ștefan cel Mare),
+and only 4 of 21 junctions came out at the right moment. Five causes, all fixed:
+
+| Problem | Evidence | Fix |
+|---|---|---|
+| GPS answer key had 1 km jumps | 0↔6 / 3↔8 misreads repeated for several seconds; the track measured 14.9 km for a ~5 km trip | `overlay.clean`: drop fixes > 250 m from the 21-s rolling median track (both dashcam drives re-parsed) |
+| Speed saturated above ~50 km/h | over a 0.2 s stride the road near the car moves past the tracker's reach; 60–80 km/h read like 30 | speed flow between adjacent frames × stride; rotation stays on the full stride (one-frame rotation was noise → fake turns) |
+| Missing road measurement read as "stopped" | the road strip had < 10 trackable points in 35 % of frames at > 15 km/h; odometer froze on Calea Ieșilor | fill gaps with the scene's forward expansion (`yaw_slope`, never missing, ~2000× stopped/moving contrast), scaled by the drive's own ratio. Moving/stopped vs GPS 73 → 88 %; odometer error median 303 → 103 m over 5.3 km |
+| Unknown way out of the start pin | car left the yard north-west, U-turned on Mircești: +800 m before the route starts; timing measured from the start shifted every later junction | alignment scores timing **between consecutive matches** (20 % of the stretch + 60 m); start / destination ties count ¼ |
+| Road-width re-ranking | flipped the right route to a wrong one; never changed the phone drive's choice | off (`WIDTH_WEIGHT = 0`) |
+
+The evaluation now also counts **physical junctions** (OSM nodes within 40 m passed within
+6 s are one crossing: a dual carriageway is 2–4 nodes) with a match ±8 s within 30 m of it,
+and whether the video-only position is within 30 m at the moment GPS passes the junction.
+
+| Drive | Route | Junctions on route | Right junction ±8 s (strict / physical) | Position ≤ 30 m at junction | Margin to runner-up |
+|---|---|---|---|---|---|
+| 2026_10_23_10_06, day, dashcam | **correct** | 20/21 (95 %) | 24 % / **33 %** (6/18) | 22 % | 9.7 vs 12.7 |
+| 2026_10_22_10_21AM, day, phone | **correct** (99 % of it, all within 30 m) | — (no GPS) | — | — | 14.7 vs 17.7 (was 7.6 vs 7.75) |
+| 2026_10_22_18_16, dusk, dashcam | wrong in the middle | 21/26 (81 %) | 0 % / 0 % | 0 % | — night, postponed |
+
+What limits the junction rate now is detection, not alignment: of the 18 physical junctions
+on the morning drive, half show no video cue or only a right-side opening (weak, many
+false ones), so the alignment skips them. Next: more junction cues in daylight (vehicles
+crossing ahead, side streets on both sides from curb / sidewalk gaps, stop lines), then
+refit the odometer scale between matched junctions — see README → Plan.

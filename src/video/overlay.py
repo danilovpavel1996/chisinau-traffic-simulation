@@ -36,9 +36,11 @@ from src.video.drives import ROOT
 
 OCR_SRC = ROOT / "src" / "video" / "ocr" / "vision_ocr.swift"
 OCR_BIN = ROOT / ".build" / "vision_ocr"
+MEDIAN_S = 21           # rolling-median window (s) of the track used to catch repeated misreads
+OFF_TRACK_M = 250       # m from that median track = a misread (a turn bends it far less)
 PATTERN = re.compile(
     r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}).*?(\d+)\s*mph.*?"
-    r"(\d{1,2})\s*°\s*(\d{1,2}\.\d+)\s*'?\s*([NS]).*?(\d{1,3})\s*°\s*(\d{1,2}\.\d+)\s*'?\s*([EW])")
+    r"(\d{1,2})\s*°?\s*(\d{1,2}\.\d+)\s*'?\s*([NS]).*?(\d{1,3})\s*°?\s*(\d{1,2}\.\d+)\s*'?\s*([EW])")   # ° often dropped by OCR
 
 
 def ocr_binary() -> Path:
@@ -46,6 +48,9 @@ def ocr_binary() -> Path:
         OCR_BIN.parent.mkdir(exist_ok=True)
         subprocess.run(["swiftc", "-O", "-o", str(OCR_BIN), str(OCR_SRC)], check=True)
     return OCR_BIN
+
+
+TIME_ONLY = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})(?:.*?(\d+)\s*mph)?")
 
 
 def parse(text: str) -> dict | None:
@@ -56,7 +61,13 @@ def parse(text: str) -> dict | None:
     t = re.sub(r"(?<=\d) (?=[NSEW]\b)", "", t)                        # '2.367 N' → '2.367N'
     m = PATTERN.search(t)
     if not m:
-        return None
+        # no position yet (the dashcam needs ~1 min for a GPS fix) — keep the clock and speed
+        tm = TIME_ONLY.search(t)
+        if not tm:
+            return None
+        day, hms, mph = tm.groups()
+        return dict(clock=datetime.fromisoformat(f"{day} {hms}"),
+                    speed_kmh=round(int(mph) * 1.609344, 1) if mph else np.nan, lat=np.nan, lon=np.nan)
     day, hms, mph, la_d, la_m, ns, lo_d, lo_m, ew = m.groups()
     lat = (int(la_d) + float(la_m) / 60) * (1 if ns == "N" else -1)
     lon = (int(lo_d) + float(lo_m) / 60) * (1 if ew == "E" else -1)
@@ -65,11 +76,25 @@ def parse(text: str) -> dict | None:
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop OCR misreads: clock must advance ~1 s per video s, positions can't jump > 60 m/s."""
+    """
+    Drop OCR misreads: the clock must advance ~1 s per video s (bad_time), positions
+    can't jump > 60 m/s and must exist (bad = not usable as a GPS position).
+    A misread digit (0↔6, 3↔8 in the minutes: ~1 km off) often repeats for several
+    seconds, so a position is also bad when it is far from the rolling median track.
+    """
     df = df.sort_values("video_s").reset_index(drop=True)
     off = (df.clock - df.clock.min()).dt.total_seconds() - df.video_s
-    df["bad"] = (off - off.rolling(15, center=True, min_periods=3).median()).abs() > 3
+    df["bad_time"] = (off - off.rolling(15, center=True, min_periods=3).median()).abs() > 3
+    df["bad"] = df.bad_time | df.lat.isna()
     kx = 111_320 * np.cos(np.radians(df.lat.median()))
+    for _ in range(3):
+        g = df[~df.bad]
+        mid_lat = g.lat.rolling(MEDIAN_S, center=True, min_periods=3).median()
+        mid_lon = g.lon.rolling(MEDIAN_S, center=True, min_periods=3).median()
+        far = np.hypot((g.lat - mid_lat) * 111_320, (g.lon - mid_lon) * kx) > OFF_TRACK_M
+        if not far.any():
+            break
+        df.loc[far[far].index, "bad"] = True
     for _ in range(3):
         g = df[~df.bad]
         step = np.hypot(g.lat.diff() * 111_320, g.lon.diff() * kx) / g.video_s.diff()
@@ -107,9 +132,10 @@ def run(drv: dict):
             bar.update(len(batch))
         bar.close()
     df = pd.DataFrame(rows)
-    ok = df.dropna(subset=["lat"])
-    df = clean(ok).merge(df[df.lat.isna()][["video_s", "text"]], how="outer")
+    ok = df.dropna(subset=["clock"])
+    df = clean(ok).merge(df[df.clock.isna()][["video_s", "text"]], how="outer")
     df["bad"] = df.bad.fillna(True).astype(bool)
+    df["bad_time"] = df.bad_time.fillna(True).astype(bool)
     df.to_parquet(out, index=False)
     good = df[~df.bad]
     print(f"→ {out}: {len(good)}/{len(df)} seconds read cleanly, clock {good.clock.min():%H:%M:%S}–"
@@ -122,9 +148,10 @@ def reparse(drv: dict):
     raw = pd.read_parquet(out)[["video_s", "text"]]
     parsed = pd.DataFrame([parse(t) or {} for t in raw.text])
     df = pd.concat([raw.reset_index(drop=True), parsed], axis=1)
-    ok = df.dropna(subset=["lat"])
-    df = clean(ok).merge(df[df.lat.isna()][["video_s", "text"]], how="outer")
+    ok = df.dropna(subset=["clock"])
+    df = clean(ok).merge(df[df.clock.isna()][["video_s", "text"]], how="outer")
     df["bad"] = df.bad.fillna(True).astype(bool)
+    df["bad_time"] = df.bad_time.fillna(True).astype(bool)
     df.to_parquet(out, index=False)
     print(f"→ {out}: {(~df.bad).sum()}/{len(df)} seconds read cleanly")
 

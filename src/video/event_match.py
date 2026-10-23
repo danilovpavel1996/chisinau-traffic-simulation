@@ -12,7 +12,8 @@ sequence of junction events seen in the video?
                           (mid-block crossings are sites too)
     3. alignment          sequence alignment (Needleman–Wunsch) of video events with
                           route sites: matches cost little when turn direction/size,
-                          crosswalk, signal and roundabout agree and the timing fits;
+                          crosswalk, signal and roundabout agree and the timing fits
+                          (distance since the previous match, not since the start);
                           unmatched sites (missed by the video) and unmatched events
                           (false detections) cost according to how detectable they are
     4. result             the cheapest route; every matched site gets a video time, and
@@ -56,7 +57,13 @@ FEATURES = ROOT / "data" / "osm" / "junction_features.parquet"
 MISS = dict(turn=3.0, roundabout=3.0, signal=1.0, crossing=0.6, junction=0.15)
 FALSE = dict(turn=2.5, crosswalk=1.2, signal=0.8, small_turn=0.5, opening=0.35)
 RERANK = 30             # best routes by alignment that are re-scored on road width
-WIDTH_WEIGHT = 4.0      # cost reduction per unit of width correlation (video vs map road size)
+WIDTH_WEIGHT = 0.0      # cost reduction per unit of width correlation (video vs map road size) — off:
+                        # it never helped (10_21AM: no change; 10_23: flipped the right route to a wrong one)
+REL_SIGMA = 0.2         # timing tolerance between consecutive matches: 20 % of the stretch …
+ABS_SIGMA_M = 60        # … + 60 m
+START_WEIGHT = 0.25     # timing from the start pin / to the destination counts ¼ (unknown way in and out)
+LOOKBACK_EV, LOOKBACK_SITES = 10, 16   # how far back the previous match is searched
+CLUSTER_M, CLUSTER_S = 40, 6            # evaluation: OSM nodes this close in space and time = one junction
 HIGHWAY_LANES = dict(motorway=6, trunk=5, primary=4, secondary=3, tertiary=2, unclassified=2,
                      residential=1.5, living_street=1, service=1)
 
@@ -218,8 +225,9 @@ def false_cost(e) -> float:
     return FALSE["small_turn"]
 
 
-def match_cost(e, s, m_obs: float, m_exp: float, sigma: float) -> float:
-    c = ((m_obs - m_exp) / sigma) ** 2                                  # timing
+def match_cost(e, s) -> float:
+    """How well a video event and a route site agree, timing aside (see align)."""
+    c = 0.0
     et = 0 if abs(e.turn_deg) <= TURN else np.sign(e.turn_deg)
     st = 0 if abs(s.turn) <= TURN else np.sign(s.turn)
     if et == st == 0:
@@ -244,32 +252,64 @@ def match_cost(e, s, m_obs: float, m_exp: float, sigma: float) -> float:
     return c
 
 
+def timing_cost(d_odo, d_map):
+    """Distance driven by the video odometer vs along the route, for the same stretch."""
+    sigma = REL_SIGMA * np.maximum(d_odo, d_map) + ABS_SIGMA_M
+    return ((d_odo - d_map) / sigma) ** 2
+
+
 def align(ev: pd.DataFrame, sites: pd.DataFrame, m_ev: np.ndarray, m_total: float):
-    """Needleman–Wunsch: cost and matched pairs (event index, site index)."""
+    """
+    Sequence alignment of events with sites: cost and matched pairs (event index, site index).
+
+    Timing is scored between consecutive matches — odometer distance from the
+    previous matched event vs route distance from the previous matched site — not
+    from the start of the drive. The way from the start pin (a yard, a car park)
+    to the first street is unknown, and the odometer drifts; measured from the
+    start, one early error shifted every later junction (2026_10_23 drive: the car
+    U-turned on Mircești first, +800 m, and 0 of 21 junctions came out right).
+    D[i, j] = best cost with event i matched to site j as the latest match; the
+    previous match is searched among the last LOOKBACK_EV events / LOOKBACK_SITES sites.
+    """
     L = sites.attrs["length"]
     n, m = len(ev), len(sites)
-    sigma = 0.12 * m_total                          # 12 % of the whole drive's odometer
-    m_exp = sites.d.to_numpy() / L * m_total
+    o = np.asarray(m_ev, float) / m_total * L          # odometer in route metres
+    d = sites.d.to_numpy(float)
     E, S = list(ev.itertuples()), list(sites.itertuples())
     fc = np.array([false_cost(e) for e in E]); mc = np.array([miss_cost(s) for s in S])
-    D = np.zeros((n + 1, m + 1)); B = np.zeros((n + 1, m + 1), dtype=np.int8)
-    D[1:, 0] = np.cumsum(fc); B[1:, 0] = 1
-    D[0, 1:] = np.cumsum(mc); B[0, 1:] = 2
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            opts = (D[i - 1, j - 1] + match_cost(E[i - 1], S[j - 1], m_ev[i - 1], m_exp[j - 1], sigma),
-                    D[i - 1, j] + fc[i - 1], D[i, j - 1] + mc[j - 1])
-            k = int(np.argmin(opts)); D[i, j] = opts[k]; B[i, j] = k
-    pairs, i, j = [], n, m
-    while i > 0 or j > 0:
-        k = B[i, j]
-        if k == 0:
-            pairs.append((i - 1, j - 1)); i -= 1; j -= 1
-        elif k == 1:
-            i -= 1
-        else:
-            j -= 1
-    return float(D[n, m]), pairs[::-1]
+    FC, MC = np.r_[0, np.cumsum(fc)], np.r_[0, np.cumsum(mc)]          # FC[i] = sum over events < i
+    F = np.array([[match_cost(e, st) for st in S] for e in E]).reshape(n, m)
+    D = np.full((n, m), np.inf)
+    back = np.full((n, m, 2), -1, dtype=int)
+    for i in range(n):
+        for j in range(m):
+            # first match: skipped events / sites before it, timing from the start (loose: unknown way out)
+            best = FC[i] + MC[j] + timing_cost(o[i], d[j]) * START_WEIGHT
+            arg = (-1, -1)
+            i0, j0 = max(0, i - LOOKBACK_EV), max(0, j - LOOKBACK_SITES)
+            if i > 0 and j > 0:
+                blk = (D[i0:i, j0:j]
+                       + (FC[i] - FC[i0 + 1:i + 1])[:, None] + (MC[j] - MC[j0 + 1:j + 1])[None, :]
+                       + timing_cost((o[i] - o[i0:i])[:, None], (d[j] - d[j0:j])[None, :]))
+                k = int(np.argmin(blk))
+                if blk.flat[k] < best:
+                    best, arg = float(blk.flat[k]), (i0 + k // (j - j0), j0 + k % (j - j0))
+            D[i, j] = F[i, j] + best
+            back[i, j] = arg
+    # end: skipped events / sites after the last match, timing to the destination
+    total = FC[n] + MC[m]
+    last = (-1, -1)
+    if n and m:
+        end = (D + (FC[n] - FC[1:])[:, None] + (MC[m] - MC[1:])[None, :]
+               + timing_cost(L - o[:, None], L - d[None, :]) * START_WEIGHT)
+        k = int(np.argmin(end))
+        if end.flat[k] < total:
+            total, last = float(end.flat[k]), (k // m, k % m)
+    pairs, cur = [], last
+    while cur[0] >= 0:
+        pairs.append(cur)
+        cur = tuple(back[cur])
+    return float(total), pairs[::-1]
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -382,7 +422,7 @@ def run(drv: dict):
                events=len(ev), sites=len(s), matched=matched,
                trace=dict(video_s=secs.tolist(), lat=np.round(lat, 6).tolist(), lon=np.round(lon, 6).tolist()),
                runner_up_cost=round(scored[1][0], 2) if len(scored) > 1 else None)
-    out["evaluation"] = evaluate(drv, R, path, matched, secs, lat, lon)
+    out["evaluation"] = evaluate(drv, R, path, matched, secs, lat, lon, s)
     (drv["folder"] / "event_match.json").write_text(json.dumps(out, default=float))
     print(f"best route: {L / 1000:.2f} km, cost {cost:.1f} (runner-up {out['runner_up_cost']}); "
           f"{len(pairs)}/{len(ev)} events matched to {len(s)} route sites")
@@ -393,8 +433,19 @@ def run(drv: dict):
     return out
 
 
-def evaluate(drv, R: RouteMap, path, matched, secs, lat, lon) -> dict:
-    """Against GPS (junction matching rate, position error) or the driver's directions (route)."""
+def evaluate(drv, R: RouteMap, path, matched, secs, lat, lon, s=None) -> dict:
+    """
+    Against GPS (junction matching rate, position error) or the driver's directions (route).
+
+    Junction matching rate, three ways:
+      strict      the matched site is the same OSM node, ±8 s
+      physical    OSM nodes within CLUSTER_M passed within CLUSTER_S are one junction (a
+                  dual-carriageway crossing is 2–4 nodes the video sees as one); right
+                  when a match ±8 s lies within SITE_NEAR of it — also a signal/crossing
+                  site drawn a few metres off the junction node
+      position    the video-only position is within SITE_NEAR of the junction at the
+                  moment GPS passes it
+    """
     res = {}
     gps = drives.gps_track(drv)
     if gps is not None:
@@ -416,6 +467,27 @@ def evaluate(drv, R: RouteMap, path, matched, secs, lat, lon) -> dict:
         res["true junctions passed (GPS)"] = len(true)
         res["junctions on the chosen route"] = f"{len(on)}/{len(true)} ({len(on) / max(len(true), 1):.0%})"
         res["junction matching rate (right junction, ±8 s)"] = f"{len(got)}/{len(true)} ({len(got) / max(len(true), 1):.0%})"
+        if s is not None and true:
+            xy = lambda n: R.xy(R.G.nodes[n]["y"], R.G.nodes[n]["x"])
+            clusters = [[true[0]]]
+            for t, n in true[1:]:
+                pt, pn = clusters[-1][-1]
+                if t - pt <= CLUSTER_S and np.hypot(*(xy(n) - xy(pn))) <= CLUSTER_M:
+                    clusters[-1].append((t, n))
+                else:
+                    clusters.append([(t, n)])
+            pts, cum = s.attrs["pts"], s.attrs["cum"]
+            site_xy = [R.xy(np.interp(x["d"], cum, pts[:, 0]), np.interp(x["d"], cum, pts[:, 1])) for x in matched]
+            ok_match = ok_pos = 0
+            for c in clusters:
+                ok_match += any(abs(x["t"] - t) <= 8 and np.hypot(*(sx - xy(n))) <= SITE_NEAR
+                                for t, n in c for x, sx in zip(matched, site_xy))
+                ok_pos += any(np.hypot(*(R.xy(np.interp(t, secs, lat), np.interp(t, secs, lon)) - xy(n))) <= SITE_NEAR
+                              for t, n in c)
+            k = len(clusters)
+            res["physical junctions passed (GPS)"] = k
+            res["junction matching rate (physical junction, ±8 s)"] = f"{ok_match}/{k} ({ok_match / k:.0%})"
+            res[f"position within {SITE_NEAR} m at the junction moment"] = f"{ok_pos}/{k} ({ok_pos / k:.0%})"
     elif drv.get("truth"):
         from src.video.localize import accuracy
         from src.video.truth import route_from_streets

@@ -66,10 +66,12 @@ def clock(drv: dict, video_s):
     between clips), else start time + seconds."""
     import numpy as np
     import pandas as pd
-    gps = gps_track(drv)
     v = np.asarray(video_s, dtype=float)
-    if gps is not None:
-        epoch = gps.clock.astype("int64") / 1e9
-        return pd.to_datetime(np.interp(v, gps.video_s, epoch), unit="s")
+    f = drv["folder"] / "gps.parquet"
+    if f.exists():                     # every second with a readable overlay clock, GPS fix or not
+        g = pd.read_parquet(f)
+        g = g[~g.get("bad_time", g.bad).astype(bool)].dropna(subset=["clock"]).sort_values("video_s")
+        epoch = g.clock.astype("int64") / 1e9
+        return pd.to_datetime(np.interp(v, g.video_s, epoch), unit="s")
     _, _, start = anchor(drv)
     return pd.to_datetime(start) + pd.to_timedelta(v, unit="s")
