@@ -357,3 +357,21 @@ and perception uploads a compressed copy (same 18,967 frames, ~⅓ the size).
   0.9–2.0 m; cars agreeing within 2×); fallback: GeoCalib focal length + horizon where the road
   ends + camera height from car widths (1.23 m). Crosswalk distances vs GPS: **1.01**
   (15 frames). Turn-based lens calibration correctly refused (night windows inconsistent).
+
+## Detailed surroundings: 5 frames/s, full-resolution segmentation (2026-10-24)
+
+`dense.py` replaces the separate dense-segmentation and depth uploads: one small video of the
+model input (above the bonnet, 960 px, ~350 MB for 10 min; one padding row because H.264 4:2:0
+needs an even height, cropped off on the VM) is uploaded once; Mask2Former and Depth Anything run
+in one Colab session on **every 6th frame (5 per second — the frames perception detects on)**;
+class maps at every pixel (was every 2nd), depth at ½ (was ¼). ~0.37 s/frame on a T4 for both.
+Plan view drawn at 20 px/m (was 10), 3D ground texture 32 px/m (was 16).
+
+The 3D road surface is now a plain `<video>` placed in 3D with CSS (three.js CSS3DRenderer) under a
+transparent WebGL layer for the cars and lights: from a file (file://) Chrome will not hand a video
+to WebGL, but CSS shows it — the 3D view no longer needs the local viewer. The ground under and
+behind the car (hidden by the bonnet) continues the nearest ground seen.
+
+Colab robustness: a progress check that lost its connection hung for ever (no timeout on the CLI
+call) — every call now has a time limit, 10 failed checks in a row raise a clear error, and
+`dense.py --collect` downloads the results of a job that finished on a runtime still alive.

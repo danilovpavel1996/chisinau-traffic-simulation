@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -37,8 +38,7 @@ import torch
 from geocalib import GeoCalib
 zipfile.ZipFile("/content/frames.zip").extractall("/content/frames")
 files = sorted(os.listdir("/content/frames"))
-files = files[len(files) // 20 : -len(files) // 20]                  # skip the yard and the car park
-files = files[:: max(1, len(files) // {n})][: {n}]
+files = files[: {n}]                                                 # already spread over the street window
 model = GeoCalib().to("cuda")
 out = []
 for n, f in enumerate(files):
@@ -64,13 +64,31 @@ print("done", len(out), flush=True)
 '''
 
 
+def export_frames(drv: dict) -> Path:
+    """N_FRAMES model-input images (scene.crop) spread over the street window, as a zip."""
+    import zipfile
+    import cv2
+    from src.video.scene import crop
+    out = drv["folder"] / "colab" / f"{drv['key']}_lens_frames.zip"
+    out.parent.mkdir(exist_ok=True)
+    meta = json.loads((drv["folder"] / "meta.json").read_text())
+    t0, t1 = drv.get("street_window_s", [0, meta["end_s"]])
+    cap = cv2.VideoCapture(str(drv["video"]))
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+        for t in np.linspace(t0, t1, N_FRAMES + 2)[1:-1]:
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            ok, fr = cap.read()
+            if ok:
+                ok, buf = cv2.imencode(".jpg", cv2.cvtColor(crop(fr, drv["camera"]["hood"]), cv2.COLOR_RGB2BGR),
+                                       [cv2.IMWRITE_JPEG_QUALITY, 92])
+                z.writestr(f"{t:08.1f}.jpg", buf.tobytes())
+    return out
+
+
 def run_colab(drv: dict, reuse: bool = False) -> dict:
     from src.video.colab import Session
-    from src.video.scene import export_colab
     folder, key = drv["folder"], drv["key"]
-    frames = folder / "colab" / f"{key}_frames_dense.zip"
-    if not frames.exists():
-        export_colab(drv, dense=True)
+    frames = export_frames(drv)
     t0 = time.time()
     with Session(f"lens-{key}", reuse=reuse) as s:
         s.upload(frames, "/content/frames.zip")

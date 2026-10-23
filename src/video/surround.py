@@ -35,7 +35,7 @@ from src.video.bev import Geometry
 from src.video.compute import progress
 from src.video.scene import CODES, DENSE_FPS, WIDTH
 
-PX_PER_M = 16
+PX_PER_M = 32            # ground texture: 1024 × 1536 px
 X_RANGE = (-16.0, 16.0)
 Z_RANGE = (-4.0, 44.0)
 STYLE = {                     # BGR, Tesla-like: dark scene, white paint
@@ -54,6 +54,7 @@ def ground_video(drv: dict, geo: Geometry) -> int:
     meta = json.loads((folder / "meta.json").read_text())
     dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t").reset_index(drop=True)
     (W, H), valid, rr, cc = geo.grid(PX_PER_M, X_RANGE, Z_RANGE)
+    near_rows = int((Z_RANGE[1] - (geo.z_min + 0.5)) * PX_PER_M)        # first row nearer than what is seen
     lut = np.array([STYLE.get(c, DARK) for c in CODES], np.uint8)
     times = np.round(np.arange(0, meta["end_s"], 1 / DENSE_FPS), 1)
     dt = dense.t.to_numpy()
@@ -69,6 +70,8 @@ def ground_video(drv: dict, geo: Geometry) -> int:
             r = dense.iloc[j]
             codes = np.frombuffer(zlib.decompress(r["mask"]), np.uint8).reshape(json.loads(r["mask_shape"]))
             img[valid] = lut[codes[rr, cc][valid]]
+            img[near_rows:] = img[near_rows - 1]           # the ground under / behind the car continues the
+                                                            # nearest ground seen (the bonnet hides the first metres)
         ff.stdin.write(img.tobytes())
         bar.update(1)
     bar.close()

@@ -72,8 +72,8 @@ CLASSES = {            # Vistas label → short name stored in the output
     "Sky": "sky", "Person": "person", "Bicyclist": "person", "Motorcyclist": "person",
 }
 MASK_STEP = 8          # stored class map: every 8th pixel (960 px → 120 columns)
-DENSE_FPS = 2          # --dense: frames per second
-DENSE_STEP = 2         # --dense: class map every 2nd pixel
+DENSE_FPS = 5          # dense frames per second (dense.py: every 6th frame, as perception)
+DENSE_STEP = 1         # dense class map: every pixel (was every 2nd)
 DENSE_TOP = 0.35       # --dense: rows from this fraction of the image height down (the horizon is ~0.5)
 CODES = sorted(set(CLASSES.values())) + ["other"]     # class map value → short name
 

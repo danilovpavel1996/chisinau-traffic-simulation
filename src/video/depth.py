@@ -32,7 +32,7 @@ import pandas as pd
 from src.video import drives
 
 MODEL = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf"
-DOWN = 4                 # stored depth map: 1/4 of the 960-px inference image (240 × ~123)
+DOWN = 2                 # stored depth map: 1/2 of the 960-px inference image (480 × ~245)
 
 REMOTE = '''
 import io, os, time, zipfile, zlib

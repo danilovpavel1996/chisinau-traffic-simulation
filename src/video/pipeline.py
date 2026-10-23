@@ -6,12 +6,12 @@ Run every step for one drive, in order:
     perception   video → detections.parquet, ego.parquet: RT-DETRv2 + BoT-SORT (Google Colab GPU)
     overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
     traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
-    scene        → scene.parquet + scene_dense.parquet: crosswalks, lane markings, curbs… (Google Colab GPU)
+    scene        → scene.parquet: crosswalks, lane markings, curbs… on candidate frames (Google Colab GPU)
+    dense        → scene_dense.parquet + depth.parquet: segmentation and depth, 5 frames/s (Google Colab GPU)
     localize     → match.json (video-only route on the map, accuracy vs truth / GPS)
     road         → road.parquet: road width + side-street openings from the class maps
     events       → events.parquet: junction events seen in the video (turns, roundabouts, crosswalks, signals)
     event_match  → event_match.json: video-only route from start + destination (event-based)
-    depth        → depth.parquet: distance to every pixel, Depth Anything V2 (Google Colab GPU)
     lens         → calibration.json: focal length + distortion measured with GeoCalib (Google Colab GPU)
     calibrate    → calibration.json: field of view + depth scale measured against the map; re-match
     bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
@@ -36,7 +36,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "depth", "lens", "road", "events", "event_match", "calibrate", "bev", "surround", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "bev", "surround", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -53,10 +53,9 @@ def run_step(step: str, drv: dict):
     elif step == "scene":                     # > 5 min on the laptop → free Colab GPU
         from src.video import scene
         scene.run_colab(drv)
-        scene.run_colab(drv, dense=True)
-    elif step == "depth":                     # > 5 min on the laptop → free Colab GPU
-        from src.video import depth
-        depth.run_colab(drv)
+    elif step == "dense":                     # > 5 min on the laptop → free Colab GPU
+        from src.video import dense
+        dense.run_colab(drv)
     elif step == "lens":
         from src.video import lens
         lens.run_colab(drv)

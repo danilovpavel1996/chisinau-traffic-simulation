@@ -40,9 +40,9 @@ method works.
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
 | **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ depth within ~7 % of GPS after calibration against the map |
 | **Camera self-calibration** (no specs, no GPS): field of view from map turns, depth from crosswalk approaches | ✅ dashcam "120°" measured as 99° (GPS check agrees); refuses when the evidence is inconsistent |
-| **Tesla-style 3D surround view**: road, lane markings, vehicles, traffic lights around the car | ✅ first version (2026-10-23) |
+| **Tesla-style 3D surround view**: road, lane markings, vehicles, traffic lights around the car | ✅ 5 frames/s, full-resolution segmentation (2026-10-24); works opened as a file too |
 | Distances in metres (no camera specs, no GPS positions) | ✅ scale from parked cars + the dashcam's speed; lens from GeoCalib; depth fitted to the road: crosswalks vs GPS 0.99 |
-| Dashboard: video · spatial view (3D / plan + map) · map (GPS point and video-only point) | ✅ best opened with the local viewer (`python -m src.video.dashboard.serve --open`) |
+| Dashboard: video · spatial view (3D / plan + map) · map (GPS point and video-only point) | ✅ `data/video/dashboard.html` |
 
 ### Models and data sources — what detects what
 

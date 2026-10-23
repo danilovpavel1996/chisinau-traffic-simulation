@@ -32,6 +32,7 @@ from src.video.drives import ROOT
 COLAB = ROOT / ".venv-colab" / "bin" / "colab"
 CHUNK_MB = 25            # the file API rejects single uploads above ~30 MB (HTTP 500)
 POLL_S = 30
+MAX_FAILED_POLLS = 10     # ~5 min of failed progress checks
 UPLOAD_TRIES = 3
 JOB, LOG, DONE = "/content/job.py", "/content/job.log", "/content/job.done"
 
@@ -42,11 +43,17 @@ class Session:
         self.gpu = gpu
         self.reuse = reuse           # attach to a runtime that is still alive (e.g. after the laptop crashed)
 
-    def colab(self, *args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+    def colab(self, *args: str, check: bool = True, capture: bool = False,
+              timeout: float | None = None) -> subprocess.CompletedProcess:
         cmd = [str(COLAB), "--auth", "oauth2", *args]
         if not capture:
             print("$ colab " + " ".join(shlex.quote(a) for a in args), flush=True)
-        return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+        try:
+            return subprocess.run(cmd, check=check, capture_output=capture, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:     # a CLI call that lost its connection can hang for ever
+            if check:
+                raise
+            return subprocess.CompletedProcess(cmd, 124, stdout="", stderr="colab CLI call timed out")
 
     def __enter__(self) -> "Session":
         if self.reuse:
@@ -69,7 +76,8 @@ class Session:
         """Execute a short snippet on the VM and return what it printed."""
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
-        out = self.colab("exec", "-s", self.name, "-f", f.name, "--timeout", str(timeout), check=False, capture=True)
+        out = self.colab("exec", "-s", self.name, "-f", f.name, "--timeout", str(timeout), check=False, capture=True,
+                         timeout=timeout + 90)
         Path(f.name).unlink()
         return (out.stdout or "") + (out.stderr or "")
 
@@ -121,12 +129,20 @@ print("started")""")
 
     def wait(self, poll_s: float = POLL_S) -> int:
         """Print the job's progress until it ends; returns its exit code."""
-        seen = ""
+        seen, failed = "", 0
         while True:
             out = self.run(f"""import os
 log = open({LOG!r}, errors="replace").read() if os.path.exists({LOG!r}) else ""
 print(log[-3000:].replace("\\r", "\\n"))
 print("@@EXIT", open({DONE!r}).read().strip() if os.path.exists({DONE!r}) else "running")""", timeout=60)
+            if "@@EXIT" not in out:                      # the check itself failed (connection), not the job
+                failed += 1
+                if failed >= MAX_FAILED_POLLS:
+                    raise RuntimeError(f"lost contact with the Colab runtime ({failed} checks failed); the job may "
+                                       f"still be running there — rerun with --reuse to collect it")
+                time.sleep(poll_s)
+                continue
+            failed = 0
             lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("@@EXIT")]
             last = lines[-1] if lines else ""
             if last and last != seen:

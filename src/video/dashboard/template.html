@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS3DRenderer.js"></script>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #6b7480; --line: #e3e6ea;
@@ -38,8 +39,10 @@
 
   .bevcard .title { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .bevcard .title label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
-  #surround { display: block; width: 100%; background: #0b0d10; }
-  .bevcard.plan #surround, .bevcard.plan .legend3d, .bevcard:not(.plan) #bev, .bevcard:not(.plan) .legendplan { display: none; }
+  #s3d { position: relative; width: 100%; background: #0b0d10; overflow: hidden; }
+  #s3d > * { position: absolute !important; left: 0; top: 0; }
+  #surround { display: block; width: 100%; z-index: 1; }
+  .bevcard.plan #s3d, .bevcard.plan .legend3d, .bevcard:not(.plan) #bev, .bevcard:not(.plan) .legendplan { display: none; }
   .bevlegend { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 6px 10px; font-size: 11px; color: #c9ced6; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .videowrap { position: relative; background: #000; }
@@ -98,8 +101,8 @@
     <div class="title">Spatial view
       <label><input type="radio" name="sview" value="3d" checked> 3D surround</label>
       <label><input type="radio" name="sview" value="plan"> plan + map</label></div>
-    <canvas id="surround"></canvas>
-    <video id="sground" muted playsinline preload="auto" style="display:none"></video>
+    <div id="s3d"><canvas id="surround"></canvas></div>
+    <video id="sground" muted playsinline preload="auto"></video>
     <video id="bev" muted playsinline preload="auto"></video>
     <div class="bevlegend legend3d">
       <span><span class="sw" style="background:#2c2f34"></span>road</span>
@@ -150,12 +153,16 @@ const INDEX = /*__INDEX__*/[];
 // car frame from surround.py: X right, Z ahead, Y up  →  three.js (x, y, z) = (X, Y, −Z)
 function surroundView(D) {
   if (!D.surround || typeof THREE === "undefined") return null;
-  const canvas = document.getElementById("surround"), groundVid = document.getElementById("sground");
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // The road surface is a plain <video> placed in 3D by CSS (CSS3DRenderer), under a transparent
+  // WebGL layer with the cars and lights: a page opened from disk (file://) may not hand a video
+  // to WebGL, but CSS can show it — so the 3D view works without the local viewer too.
+  const canvas = document.getElementById("surround"), groundVid = document.getElementById("sground"), box3d = document.getElementById("s3d");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio || 1);
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0d10);
-  scene.fog = new THREE.Fog(0x0b0d10, 45, 90);
+  renderer.setClearColor(0x000000, 0);
+  const css = new THREE.CSS3DRenderer();
+  box3d.insertBefore(css.domElement, canvas);
+  const scene = new THREE.Scene(), cssScene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
   let yaw = 0, pitch = 0.42, dist = 24;                          // orbit around a point ahead of the car
   const target = new THREE.Vector3(0, 0, -10);
@@ -172,18 +179,16 @@ function surroundView(D) {
   const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(6, 14, 8); scene.add(sun);
 
   const G = D.surround.ground;
-  // from disk (file://) Chrome will not hand a video to WebGL: plain ground, objects still drawn
-  const fromDisk = location.protocol === "file:";
-  if (fromDisk) document.querySelector(".legend3d").insertAdjacentHTML("beforeend",
-    '<span style="color:#f2a33a">road surface: open the local viewer — python -m src.video.dashboard.serve --open</span>');
-  else groundVid.src = G.video;
-  const tex = fromDisk ? null : new THREE.VideoTexture(groundVid);
+  groundVid.src = G.video;
   const gw = G.x_range[1] - G.x_range[0], gl = G.z_range[1] - G.z_range[0];
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gl),
-    new THREE.MeshBasicMaterial(tex ? { map: tex } : { color: 0x22252a }));
+  const PX = 1000;                                                 // CSS pixels per metre … scaled back below
+  groundVid.style.width = gw * PX / 100 + "px"; groundVid.style.height = gl * PX / 100 + "px";
+  groundVid.style.objectFit = "fill";
+  const ground = new THREE.CSS3DObject(groundVid);
+  ground.scale.setScalar(100 / PX);
   ground.rotation.x = -Math.PI / 2;
   ground.position.set((G.x_range[0] + G.x_range[1]) / 2, 0, -(G.z_range[0] + G.z_range[1]) / 2);
-  scene.add(ground);
+  cssScene.add(ground);
 
   const box = (w, h, l, color, opts = {}) => new THREE.Mesh(new THREE.BoxGeometry(w, h, l),
     new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.55, metalness: 0.15 }, opts)));
@@ -203,16 +208,16 @@ function surroundView(D) {
   const F = D.surround.frames, FT = F.map(f => f[0]);
   const at = t => { let lo = 0, hi = FT.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (FT[m] <= t) lo = m; else hi = m - 1; } return lo; };
   function resize() {
-    const w = canvas.clientWidth, h = Math.round(w * 1.3);
-    if (canvas.height !== h * renderer.getPixelRatio() || canvas.style.height !== h + "px") {
-      canvas.style.height = h + "px"; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    const w = box3d.clientWidth, h = Math.round(w * 1.3);
+    if (box3d.style.height !== h + "px") {
+      box3d.style.height = h + "px"; canvas.style.width = w + "px"; canvas.style.height = h + "px";
+      renderer.setSize(w, h, false); css.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
     }
   }
   function draw(t) {
-    if (canvas.offsetParent === null) return;                      // hidden (plan view)
+    if (box3d.offsetParent === null) return;                       // hidden (plan view)
     resize();
     if (groundVid.readyState >= 1 && Math.abs(groundVid.currentTime - t) > 0.25) groundVid.currentTime = Math.min(t, groundVid.duration || t);
-    if (tex && groundVid.readyState >= 2) tex.needsUpdate = true;        // a paused, seeked video is not uploaded by itself
     const i = at(t), a = F[i], b = F[Math.min(i + 1, F.length - 1)];
     const k = b[0] > a[0] ? Math.min(1, Math.max(0, (t - a[0]) / (b[0] - a[0]))) : 0;
     const next = new Map(b[1].map(o => [o[0] + ":" + o[1], o]));
@@ -232,6 +237,7 @@ function surroundView(D) {
       m.visible = true; seen.add(key);
     }
     for (const [key, m] of pool) if (!seen.has(key)) m.visible = false;
+    css.render(cssScene, camera);
     renderer.render(scene, camera);
   }
   return { draw };
