@@ -48,21 +48,29 @@ import pandas as pd
 from src.video import depth as depth_mod
 from src.video import drives
 from src.video.bev import Geometry
+from src.video.scene import CODES
 
 Z_RANGE_M = (3.0, 80.0)
 FAR_M = 30.0             # rotation from points this far (forward motion barely moves them)
-NEAR_MAX_M = 40.0        # speed from points nearer than this
+NEAR_MIN_M = 8.0         # speed from points between these distances (closer: blurred at speed,
+NEAR_MAX_M = 40.0        # tracking slips onto the windscreen's reflection)
 STILL_PX = 0.3           # a point moving less than this (pixels per frame) …
+STATIC_CELL = 16         # image cells (px) checked for windscreen reflections …
+STATIC_SHARE = 0.5       # … static if most points there stay still while the car drives
 MOVING_SHARE = 0.4       # … is windscreen dirt if at least this share of points move
 MIN_R = 0.1              # … and at least this far from the vanishing point (focal-length units)
 MIN_POINTS = 30
+# no speed from: the road surface (smooth, blurred at speed, under the dashboard's reflection —
+# 0.03× GPS out of town), sky (wires: depth unknown), "other" (mostly the reflection itself)
+NO_SPEED = [CODES.index(c) for c in ("road", "lane_marking", "crosswalk", "curb", "curb_cut", "sidewalk",
+                                     "bike_lane", "sky", "other")]
 SMOOTH_S = 2.0           # median over this window
 FRAME_FIT_M = (6.0, 25.0)  # road pixels used to rescale each frame's depth
 FRAME_FIT_MIN = 300
 FRAME_FIT_CLIP = (0.6, 1.6)
 
 
-def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float, usable=None) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
     """Speed per frame from tracked points with known depth (pinhole, normalised coordinates).
 
     The car moves along its heading, toward the vanishing point (ex, ey). A point at depth Z,
@@ -75,7 +83,7 @@ def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float) -> tuple
     T = radial motion · Z / distance from the vanishing point; the median is the speed.
     (Fitting T and w together let the rotation absorb part of the speed — a steady
     −10°/s "turn" on straight roads; correlation with GPS 0.68.)
-    still_n: STILL_PX in focal-length units.
+    still_n: STILL_PX in focal-length units; usable: points allowed to give the speed.
     Returns (T, [wx, wy, wz], T of each point used, which points)."""
     # raindrops and the dashboard's reflection on the windscreen stay put in the image: drop
     # still points when most points move (else the car itself stands still)
@@ -100,7 +108,9 @@ def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float) -> tuple
     rv = dv - ((1 + yn ** 2) * wx - xn * yn * wy - xn * wz)
     ox, oy = xn - ex, yn - ey
     r = np.hypot(ox, oy)
-    near = use & (r > MIN_R) & (Z < NEAR_MAX_M)
+    near = use & (r > MIN_R) & (Z >= NEAR_MIN_M) & (Z < NEAR_MAX_M)
+    if usable is not None:
+        near &= usable
     T = (ru * ox + rv * oy)[near] / r[near] * Z[near] / r[near]
     return (float(np.median(T)) if len(T) >= MIN_POINTS else np.nan), rot, T, near
 
@@ -125,6 +135,24 @@ def frame_factor(geo: Geometry, row: dict, D: np.ndarray) -> float:
     return float(np.clip(np.median(Zg[keep] / Zd[keep]), *FRAME_FIT_CLIP))
 
 
+def static_cells(motion: pd.DataFrame, shape: tuple[int, int]) -> np.ndarray:
+    """Image cells (STATIC_CELL px) where tracked points stay put while the car drives: the
+    dashboard's reflection in the windscreen, the windscreen's frame, dirt. Corners there are
+    strong, so evenly spread points (track_points.py) put many of them on the reflection over
+    the road — road points then read 0.03× the true speed (2026_10_24_15_48)."""
+    H, W = shape[0] // STATIC_CELL + 1, shape[1] // STATIC_CELL + 1
+    still, total = np.zeros((H, W)), np.zeros((H, W))
+    for b in motion.pts.iloc[::7]:
+        a = np.frombuffer(zlib.decompress(b), np.float16).reshape(-1, 4).astype(np.float32)
+        m = np.hypot(a[:, 2], a[:, 3])
+        if len(m) < MIN_POINTS or np.median(m) < 2.0:          # the car (nearly) stands: says nothing
+            continue
+        r, c = (a[:, 1] // STATIC_CELL).astype(int), (a[:, 0] // STATIC_CELL).astype(int)
+        np.add.at(total, (r, c), 1)
+        np.add.at(still, (r, c), m < STILL_PX)
+    return (total >= 20) & (still > STATIC_SHARE * np.maximum(total, 1))
+
+
 def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
     """Speed per analysed frame. points: if a list, every used point is added to it
     (t, class, Z, x, y, km/h) — to study which parts of the scene read too fast or slow."""
@@ -136,6 +164,7 @@ def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
     dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t").reset_index(drop=True)
     dense_t = dense.t.to_numpy()
     td, maps = depth_mod.load(drv)
+    static = static_cells(motion, (int(geo.bonnet) + 10, 960))
     rows = []
     for t, g in motion.groupby("t"):
         j = int(np.argmin(np.abs(td - t)))
@@ -145,9 +174,8 @@ def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
         i = int(np.argmin(np.abs(dense_t - t)))
         k = frame_factor(geo, dense.iloc[i].to_dict(), D) if abs(dense_t[i] - t) < 0.05 else 1.0
         D = D * k
-        if points is not None and abs(dense_t[i] - t) < 0.05:
-            row = dense.iloc[i]
-            cmap = np.frombuffer(zlib.decompress(row["mask"]), np.uint8).reshape(json.loads(row["mask_shape"]))
+        row = dense.iloc[i]
+        cmap = np.frombuffer(zlib.decompress(row["mask"]), np.uint8).reshape(json.loads(row["mask_shape"]))
         ms = []
         for r in g.itertuples():
             a = np.frombuffer(zlib.decompress(r.pts), np.float16).reshape(-1, 4).astype(np.float32)
@@ -155,21 +183,24 @@ def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
             Z = D[np.clip((p[:, 1] / depth_mod.DOWN).astype(int), 0, D.shape[0] - 1),
                   np.clip((p[:, 0] / depth_mod.DOWN).astype(int), 0, D.shape[1] - 1)]
             ok = (Z > Z_RANGE_M[0]) & (Z < Z_RANGE_M[1]) & (p[:, 1] < geo.bonnet - 5)
+            ok &= ~static[np.clip((p[:, 1] // STATIC_CELL).astype(int), 0, static.shape[0] - 1),
+                          np.clip((p[:, 0] // STATIC_CELL).astype(int), 0, static.shape[1] - 1)]
             if ok.sum() < MIN_POINTS:
                 continue
+            px, py = p[ok, 0], p[ok, 1]
+            ri = ((py - row["top"]) / row["step"]).astype(int)
+            cls = np.where(ri >= 0, cmap[np.clip(ri, 0, cmap.shape[0] - 1),
+                                         np.clip((px / row["step"]).astype(int), 0, cmap.shape[1] - 1)], 255)
             # undistort both ends of each track: the wide lens squeezes motion near the edges
             x0, y0 = geo.undistort(p[ok, 0], p[ok, 1])
             x1, y1 = geo.undistort(p[ok, 0] + d[ok, 0], p[ok, 1] + d[ok, 1])
             xn, yn = (x0 - geo.cx) / geo.fl, (y0 - geo.cy) / geo.fl
             T, rot, Tp, near = fit_motion(xn, yn, (x1 - x0) / geo.fl, (y1 - y0) / geo.fl, Z[ok], 0.0, (geo.y_h - geo.cy) / geo.fl,
-                                STILL_PX / geo.fl)
+                                STILL_PX / geo.fl, ~np.isin(cls, NO_SPEED))
             ms.append((T, rot[1]))
             if points is not None and len(Tp):
-                px, py = p[ok][near, 0], p[ok][near, 1]
-                ri = ((py - row["top"]) / row["step"]).astype(int)
-                cls = np.where(ri >= 0, cmap[np.clip(ri, 0, cmap.shape[0] - 1),
-                                             np.clip((px / row["step"]).astype(int), 0, cmap.shape[1] - 1)], 255)
-                points.append(pd.DataFrame(dict(t=float(t), cls=cls, Z=Z[ok][near], x=px, y=py, kmh=Tp * fps * 3.6)))
+                points.append(pd.DataFrame(dict(t=float(t), cls=cls[near], Z=Z[ok][near], x=px[near], y=py[near],
+                                                kmh=Tp * fps * 3.6)))
         ms = [m for m in ms if np.isfinite(m[0])]
         if ms:
             m = np.median(ms, axis=0)

@@ -9,7 +9,8 @@ road: trees beside a downhill street read too fast, a bridge with only distant b
 raindrops reads too slow (2026_10_23_10_06). So per analysed frame the model sees what the
 measurement was made of — per kind of scene point (trees, buildings, the road's surface and
 markings, poles and signs, barriers, the upper image) their median speed and share, how far
-they are, how much they disagree — and learns the true speed from it. Gradient-boosted trees
+they are, how much they disagree — and learns how far off the measurement is: a correction factor (true / measured), so the speed
+itself is still measured and a city drive can teach the highway. Gradient-boosted trees
 (scikit-learn), fitted to GPS speed only; GPS positions are never used.
 
 Scored leave-one-drive-out: each drive is predicted by a model that never saw it.
@@ -44,7 +45,9 @@ GROUPS = {
 }
 UPPER = 255                       # points above the segmented part of the image
 SMOOTH_S = 2.0
-MIN_GPS_KMH = 0.0
+MIN_GPS_KMH = 3.0                 # train on moving frames (at a standstill the factor is meaningless)
+LOW_KMH = 15.0
+K_CLIP = (0.5, 2.0)              # largest correction allowed
 
 
 def features(drv: dict) -> pd.DataFrame:
@@ -95,7 +98,30 @@ def with_truth(drv: dict, f: pd.DataFrame) -> pd.DataFrame:
 
 
 def X(f: pd.DataFrame) -> pd.DataFrame:
-    return f.drop(columns=[c for c in ("t", "drive", "gps", "yaw_dps") if c in f.columns])
+    """Scale-free features: what the measurement was made of, not how fast it read — trees cannot
+    extrapolate, and a city drive (0–60 km/h) must teach the highway (40–130) and back.
+    (Absolute speeds as features: leave-one-drive-out median error 5.5 → 16 km/h.)"""
+    base = f.med.where(f.med > 1, np.nan)
+    out = pd.DataFrame(index=f.index)
+    out["spread"] = (f.q75 - f.q25) / base
+    for g in list(GROUPS) + ["upper"]:
+        out[f"{g}_rel"] = f[f"{g}_med"] / base
+        out[f"{g}_share"] = f[f"{g}_share"]
+    for c in ("z_med", "x_abs", "depth_k", "yaw_abs", "n"):
+        out[c] = f[c]
+    out["slow"] = (f.kmh_raw < LOW_KMH).astype(float)           # near standstill the noise floor dominates
+    return out
+
+
+def target(f: pd.DataFrame) -> np.ndarray:
+    """log(true / measured): a correction factor, applied to the measured speed."""
+    return np.log(np.maximum(f.gps, 1.0) / np.maximum(f.kmh_raw.fillna(0), 1.0))
+
+
+def corrected(m, f: pd.DataFrame, columns=None) -> np.ndarray:
+    x = X(f) if columns is None else X(f)[columns]
+    k = np.exp(np.clip(m.predict(x), *np.log(K_CLIP)))
+    return np.clip(f.kmh_raw.fillna(0).to_numpy() * k, 0, None)
 
 
 def make_model():
@@ -123,10 +149,10 @@ def train(keys: list[str]):
         print("leave-one-drive-out (each drive predicted by a model that never saw it):")
         for k in keys:
             tr, te = D[D.drive != k], D[D.drive == k]
-            m = make_model().fit(X(tr), tr.gps)
+            m = make_model().fit(X(tr), target(tr))
             print(f"  {k}  raw: {score(te.kmh_raw.fillna(0), te)}")
-            print(f"  {' ' * len(k)}  model: {score(np.clip(m.predict(X(te)), 0, None), te)}", flush=True)
-    m = make_model().fit(X(D), D.gps)
+            print(f"  {' ' * len(k)}  model: {score(corrected(m, te), te)}", flush=True)
+    m = make_model().fit(X(D), target(D))
     MODEL.parent.mkdir(exist_ok=True)
     joblib.dump(dict(model=m, columns=list(X(D).columns), drives=keys), MODEL)
     print(f"→ {MODEL} (trained on {len(D)} frames from {len(keys)} drives)")
@@ -136,7 +162,7 @@ def apply(drv: dict) -> pd.DataFrame:
     import joblib
     pack = joblib.load(MODEL)
     f = features(drv)
-    pred = np.clip(pack["model"].predict(X(f)[pack["columns"]]), 0, None)
+    pred = corrected(pack["model"], f, pack["columns"])
     sp_path = drv["folder"] / "speed.parquet"
     sp = pd.read_parquet(sp_path)
     sp["kmh_model"] = np.interp(sp.t, f.t, pred)

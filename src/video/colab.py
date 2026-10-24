@@ -38,7 +38,7 @@ JOB, LOG, DONE = "/content/job.py", "/content/job.log", "/content/job.done"
 
 
 class Session:
-    def __init__(self, name: str, gpu: str = "T4", reuse: bool = False):
+    def __init__(self, name: str, gpu: str | None = "T4", reuse: bool = False):
         self.name = name.replace("_", "-").lower()
         self.gpu = gpu
         self.reuse = reuse           # attach to a runtime that is still alive (e.g. after the laptop crashed)
@@ -59,8 +59,9 @@ class Session:
         if self.reuse:
             print(f"reusing the running GPU runtime '{self.name}'…", flush=True)
             return self
-        print(f"starting a {self.gpu} GPU runtime '{self.name}' (first time: sign in to Google when asked)…", flush=True)
-        self.colab("new", "-s", self.name, "--gpu", self.gpu)
+        kind = f"{self.gpu} GPU" if self.gpu else "CPU"
+        print(f"starting a {kind} runtime '{self.name}' (first time: sign in to Google when asked)…", flush=True)
+        self.colab("new", "-s", self.name, *(["--gpu", self.gpu] if self.gpu else []))
         return self
 
     def has(self, remote: str, size: int) -> bool:

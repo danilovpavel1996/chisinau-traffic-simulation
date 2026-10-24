@@ -16,6 +16,7 @@ it and runs both models; one upload and one runtime instead of two each.
     motion        feature points tracked through the next FLOW_PAIRS adjacent frame pairs
                   (vehicles excluded): position and motion per point, for speed.py — speed =
                   radial motion × fps × depth / distance from the vanishing point
+                  (→ motion_dense.parquet; speed.py now uses track_points.py's points)
 
 Usage:
     .venv-video/bin/python -m src.video.dense <drive>            # Colab T4
@@ -162,8 +163,11 @@ def run_colab(drv: dict, reuse: bool = False, collect: bool = False):
             if s.wait() != 0:
                 print(s.log())
                 raise RuntimeError("dense segmentation + depth on Colab failed")
-        for name in ("scene_dense.parquet", "depth.parquet", "motion.parquet"):
+        for name in ("scene_dense.parquet", "depth.parquet"):
             s.download(f"/content/{name}", folder / name)
+        # the points speed.py uses come from track_points.py (every frame pair, spread evenly);
+        # these (strongest corners, 3 pairs per analysed frame) are kept for comparison
+        s.download("/content/motion.parquet", folder / "motion_dense.parquet")
     n = len(pd.read_parquet(folder / "scene_dense.parquet"))
     print(f"→ {folder}/scene_dense.parquet, depth.parquet: {n} frames ({n / json.loads((folder / 'meta.json').read_text())['end_s']:.1f} per s), "
           f"Colab {(time.time() - t0) / 60:.1f} min", flush=True)
