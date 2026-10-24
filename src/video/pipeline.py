@@ -36,7 +36,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "bev", "surround", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "speed", "bev", "surround", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -62,6 +62,12 @@ def run_step(step: str, drv: dict):
     elif step == "calibrate":
         from src.video import calibrate
         calibrate.run(drv)
+    elif step == "speed":                     # needs track_points.py's motion.parquet (Colab CPU)
+        from src.video import speed
+        if (drv["folder"] / "motion.parquet").exists():
+            speed.run(drv)
+        else:
+            print("   no motion.parquet yet (python -m src.video.track_points <drive> --colab) — skipped")
     elif step == "bev":
         from src.video import bev
         bev.run(drv)

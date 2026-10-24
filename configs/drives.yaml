@@ -70,20 +70,31 @@
 
 "2026_10_24_15_48":
   video: data/video/raw/2026_10_24_15_48.mp4      # 6 dashcam clips joined (lossless)
-  description: Dashcam (front camera), afternoon / daylight
+  description: Out of town (south, ~21 km, mostly 60–110 km/h) → Șoseaua Muncești, dashcam (front camera), afternoon / daylight
   camera:
     hfov_deg: 120
     hood: 0.12
   stride: 6
+  # the street map covers Chișinău only: the route is matched from where the car enters it
+  # (Șos. Muncești, ~917 s) to the end of the video, still driving; the whole drive trains speed
+  street_window_s: [920.0, 1078.0]
+  start: [46.93205, 28.958533]
+  destination: [46.9498, 28.931075]
   overlay:
     height_px: 46
 
 "2026_10_24_17_08":
   video: data/video/raw/2026_10_24_17_08.mp4      # 7 dashcam clips joined (lossless)
-  description: Dashcam (front camera), late afternoon / daylight
+  description: Ciocana → Mircești (home), ~13.8 km through the city, dashcam (front camera), late afternoon / daylight
   camera:
     hfov_deg: 120
     hood: 0.12
   stride: 6
+  # start right after the 171° U-turn out of the yard onto the street; destination where the
+  # loop into the home yard begins — the U-turn on Mircești where 2026_10_23_10_06 starts.
+  # Both times from the video's own turn detection, not GPS
+  street_window_s: [249.2, 1189.8]
+  start: [47.056617, 28.890483]
+  destination: [47.059468, 28.8113]
   overlay:
     height_px: 46

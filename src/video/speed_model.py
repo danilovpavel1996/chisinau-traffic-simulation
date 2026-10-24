@@ -110,7 +110,14 @@ def X(f: pd.DataFrame) -> pd.DataFrame:
     for c in ("z_med", "x_abs", "depth_k", "yaw_abs", "n"):
         out[c] = f[c]
     out["slow"] = (f.kmh_raw < LOW_KMH).astype(float)           # near standstill the noise floor dominates
-    return out
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
+def fit(f: pd.DataFrame):
+    """Model on the columns that carry information in this training set."""
+    x = X(f)
+    cols = [c for c in x.columns if x[c].notna().sum() > 50 and x[c].nunique() > 1]
+    return make_model().fit(x[cols], target(f)), cols
 
 
 def target(f: pd.DataFrame) -> np.ndarray:
@@ -149,12 +156,12 @@ def train(keys: list[str]):
         print("leave-one-drive-out (each drive predicted by a model that never saw it):")
         for k in keys:
             tr, te = D[D.drive != k], D[D.drive == k]
-            m = make_model().fit(X(tr), target(tr))
+            m, cols = fit(tr)
             print(f"  {k}  raw: {score(te.kmh_raw.fillna(0), te)}")
-            print(f"  {' ' * len(k)}  model: {score(corrected(m, te), te)}", flush=True)
-    m = make_model().fit(X(D), target(D))
+            print(f"  {' ' * len(k)}  model: {score(corrected(m, te, cols), te)}", flush=True)
+    m, cols = fit(D)
     MODEL.parent.mkdir(exist_ok=True)
-    joblib.dump(dict(model=m, columns=list(X(D).columns), drives=keys), MODEL)
+    joblib.dump(dict(model=m, columns=cols, drives=keys), MODEL)
     print(f"→ {MODEL} (trained on {len(D)} frames from {len(keys)} drives)")
 
 

@@ -51,6 +51,7 @@ from src.video.bev import Geometry
 from src.video.scene import CODES
 
 Z_RANGE_M = (3.0, 80.0)
+ROUNDS = 3               # rotation ↔ speed refinements
 FAR_M = 30.0             # rotation from points this far (forward motion barely moves them)
 NEAR_MIN_M = 8.0         # speed from points between these distances (closer: blurred at speed,
 NEAR_MAX_M = 40.0        # tracking slips onto the windscreen's reflection)
@@ -58,6 +59,11 @@ STILL_PX = 0.3           # a point moving less than this (pixels per frame) …
 STATIC_CELL = 16         # image cells (px) checked for windscreen reflections …
 STATIC_SHARE = 0.5       # … static if most points there stay still while the car drives
 MOVING_SHARE = 0.4       # … is windscreen dirt if at least this share of points move
+# vanishing point of travel, x in focal-length units from the image centre: this dashcam looks
+# ~4.5° right of the direction of travel — where points left and right of it agree on the speed
+# (median-only fit, 2026_10_23_10_06: −0.08; 2026_10_24_15_48: −0.12; one side read 0.63× the
+# other at 0). With the rotation refined (ROUNDS) the exact value matters little (±0.4 km/h).
+FOE_X = -0.08
 MIN_R = 0.1              # … and at least this far from the vanishing point (focal-length units)
 MIN_POINTS = 30
 # no speed from: the road surface (smooth, blurred at speed, under the dashboard's reflection —
@@ -95,23 +101,30 @@ def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float, usable=N
     xf, yf = xn[far], yn[far]
     A = np.vstack([np.column_stack([xf * yf, -(1 + xf ** 2), yf]),
                    np.column_stack([1 + yf ** 2, -xf * yf, -xf])])
-    b = np.concatenate([du[far], dv[far]])
-    w = np.ones_like(b)
-    for _ in range(5):
-        sw = np.sqrt(w)
-        rot = np.linalg.lstsq(A * sw[:, None], b * sw, rcond=None)[0]
-        res = np.abs(A @ rot - b)
-        c = 1.345 * max(np.median(res) / 0.6745, 1e-6)
-        w = np.where(res <= c, 1.0, c / np.maximum(res, 1e-12))
-    wx, wy, wz = rot
-    ru = du - (xn * yn * wx - (1 + xn ** 2) * wy + yn * wz)
-    rv = dv - ((1 + yn ** 2) * wx - xn * yn * wy - xn * wz)
     ox, oy = xn - ex, yn - ey
     r = np.hypot(ox, oy)
     near = use & (r > MIN_R) & (Z >= NEAR_MIN_M) & (Z < NEAR_MAX_M)
     if usable is not None:
         near &= usable
-    T = (ru * ox + rv * oy)[near] / r[near] * Z[near] / r[near]
+    # distant points still move a little from driving (4 px per frame at 30 m, 80 km/h): remove
+    # the motion the current speed implies before fitting the rotation again, and repeat
+    t_est, T = 0.0, np.array([])
+    for _ in range(ROUNDS):
+        b = np.concatenate([du[far] - ox[far] * t_est / Z[far], dv[far] - oy[far] * t_est / Z[far]])
+        w = np.ones_like(b)
+        for _ in range(5):
+            sw = np.sqrt(w)
+            rot = np.linalg.lstsq(A * sw[:, None], b * sw, rcond=None)[0]
+            res = np.abs(A @ rot - b)
+            c = 1.345 * max(np.median(res) / 0.6745, 1e-6)
+            w = np.where(res <= c, 1.0, c / np.maximum(res, 1e-12))
+        wx, wy, wz = rot
+        ru = du - (xn * yn * wx - (1 + xn ** 2) * wy + yn * wz)
+        rv = dv - ((1 + yn ** 2) * wx - xn * yn * wy - xn * wz)
+        T = (ru * ox + rv * oy)[near] / r[near] * Z[near] / r[near]
+        if len(T) < MIN_POINTS:
+            break
+        t_est = max(float(np.median(T)), 0.0)
     return (float(np.median(T)) if len(T) >= MIN_POINTS else np.nan), rot, T, near
 
 
@@ -153,10 +166,12 @@ def static_cells(motion: pd.DataFrame, shape: tuple[int, int]) -> np.ndarray:
     return (total >= 20) & (still > STATIC_SHARE * np.maximum(total, 1))
 
 
-def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
+def raw_speed(drv: dict, points: list | None = None, foe_x: float | None = None, every: int = 1) -> pd.DataFrame:
     """Speed per analysed frame. points: if a list, every used point is added to it
-    (t, class, Z, x, y, km/h) — to study which parts of the scene read too fast or slow."""
+    (t, class, Z, x, y, km/h) — to study which parts of the scene read too fast or slow.
+    foe_x: vanishing point of travel (default FOE_X); every: use only every n-th analysed frame."""
     folder = drv["folder"]
+    foe_x = FOE_X if foe_x is None else foe_x
     meta = json.loads((folder / "meta.json").read_text())
     fps = meta["fps"]
     geo = Geometry(drv, pd.read_parquet(folder / "scene_dense.parquet").iloc[0])
@@ -166,7 +181,10 @@ def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
     td, maps = depth_mod.load(drv)
     static = static_cells(motion, (int(geo.bonnet) + 10, 960))
     rows = []
+    keep_t = set(np.unique(motion.t)[::every])
     for t, g in motion.groupby("t"):
+        if t not in keep_t:
+            continue
         j = int(np.argmin(np.abs(td - t)))
         if abs(td[j] - t) > 0.05:
             continue
@@ -195,7 +213,7 @@ def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
             x0, y0 = geo.undistort(p[ok, 0], p[ok, 1])
             x1, y1 = geo.undistort(p[ok, 0] + d[ok, 0], p[ok, 1] + d[ok, 1])
             xn, yn = (x0 - geo.cx) / geo.fl, (y0 - geo.cy) / geo.fl
-            T, rot, Tp, near = fit_motion(xn, yn, (x1 - x0) / geo.fl, (y1 - y0) / geo.fl, Z[ok], 0.0, (geo.y_h - geo.cy) / geo.fl,
+            T, rot, Tp, near = fit_motion(xn, yn, (x1 - x0) / geo.fl, (y1 - y0) / geo.fl, Z[ok], foe_x, (geo.y_h - geo.cy) / geo.fl,
                                 STILL_PX / geo.fl, ~np.isin(cls, NO_SPEED))
             ms.append((T, rot[1]))
             if points is not None and len(Tp):
