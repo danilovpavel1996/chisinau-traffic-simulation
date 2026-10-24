@@ -33,7 +33,7 @@ method works.
 | | Status |
 |---|---|
 | Detect vehicles, traffic lights, crosswalks, lanes, curbs from the video | ✅ works in daylight; at night lights and crosswalks are weak |
-| Own motion: moving / stopped, speed, turns, roundabouts | ✅ moving / stopped 88 % vs GPS; turn angles right after calibration; ⚠️ speed rough (± ~11 km/h, correlation 0.5) |
+| Own motion: moving / stopped, speed, turns, roundabouts | ✅ moving / stopped 88 % vs GPS; turn angles right after calibration; speed from flow × metric depth: median error 6.6 km/h, correlation 0.84 vs GPS, metric without calibration (`speed.py`); a learned per-road correction (`speed_model.py`) in training |
 | Which **route** was driven (video only, start + destination) | ✅ daylight: right route on both daylight drives (out of 300 candidates) |
 | Which **junction at which moment** (target ≈ 80 %) | ⚠️ 44 % in daylight (8 of 18 junctions); position within 30 m at 50 % of junction moments — see plan, step 1 |
 | Night drives | ❌ rotation drift; events are noise — postponed |
@@ -214,6 +214,8 @@ src/
     overlay.py           dashcam burnt-in time / speed / GPS (Apple Vision OCR) → answer key
     perception.py        YOLO11s + ByteTrack + optical flow
     motion.py            the car's own motion: moving, speed, rotation, turns, stops
+    speed.py             speed from tracked points × metric depth (rotation removed)
+    speed_model.py       learned speed correction, trained on GPS speed of overlay drives
     traffic.py           other road users: oncoming, parked, same direction…
     scene.py             Mask2Former segmentation (local or Google Colab GPU)
     road_geometry.py     road width, side streets opening

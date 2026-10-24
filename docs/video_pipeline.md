@@ -430,3 +430,32 @@ with GPS **0.79** (scene flow: 0.47), median error **9.2 km/h** (13.7) after one
 0.79× GPS). `dense.py` now also tracks points through 3 adjacent frame pairs after each analysed
 frame (motion.parquet); `speed.py` turns them into km/h, scaled by the overlay speed if present,
 else the matched route length.
+
+### Speed, second round (2026-10-24 evening)
+
+Motion now captured for every analysed frame (5/s, 3 adjacent frame pairs each). Error sources
+found and removed, on 2026_10_23_10_06 vs GPS (street window):
+
+| step | correlation | median error | 90 % within | raw scale |
+|---|---|---|---|---|
+| radial flow × depth, median over points | 0.79 | 8.7 km/h | 26.5 | 0.86× |
+| 6 unknowns (speed, side/vertical drift, 3 rotations) at once | 0.72 | 10.6 | 35.8 | 0.98× |
+| direction fixed to the vanishing point, rotation fitted with speed | 0.68 | 9.5 | 33.5 | 1.02× — a steady −10°/s "turn" absorbed speed |
+| **rotation from distant points only (Z ≥ 30 m), speed from near ones, undistorted** | 0.81 | 7.4 | 23.7 | 1.00× |
+| + depth rescaled per frame by its own road pixels, 2-s median | 0.84 | 6.6 | 21.3 | 0.99× |
+| + still points dropped (raindrops, the dashboard's reflection) | 0.84–0.85 | 6.6–6.7 | 20.8 | 0.98× |
+
+The estimate is now metric without any calibration. Errors left depend on the road: on the
+tree-lined downhill of Mircești it reads ~1.2× (vegetation points), on the Bd. Moscova bridge
+~0.4× (only distant buildings, wires and raindrops to track); per scene class no single
+class is unbiased everywhere. Hence `speed_model.py`: gradient-boosted trees fitted to GPS
+speed on what each frame's speed was measured on (median speed and share of points per scene
+class, distance, spread, depth correction, turning). Trained on one half of 10_06 and tested
+on the other: correlation 0.83 → 0.89, median error 7.4 → 6.2 km/h (and 0.87 → 0.88, 6.1 → 5.2
+the other way round). Next: train on the out-of-town drive 2026_10_24_15_48 (few cars, long
+fast stretches), the city drive 2026_10_24_17_08 and the night drive, scored leave-one-drive-out.
+
+As the matcher's odometer the better speed has not helped yet (physical junctions 7/18 → 6/18,
+position within 30 m 6/18 → 7/18): the matching is limited by the junction events, not the
+distance between them. Dead-reckoned from the start alone it drifts up to ~400 m (scene flow:
+~350 m) because the per-road bias accumulates — the model should fix exactly that.
