@@ -230,9 +230,13 @@ function surroundView(D) {
       if (o[1] === 4) {
         m.position.set(X, o[5], -Z); m.userData.lamp.material.color.setHex(LAMP[o[6]]);
       } else {
+        // heading from the vehicle's own track (surround.py), 0 = our direction, + = to the right;
+        // (X, Z) is the nearest point it touches the road → its centre is half its extent further away
         const [hgt, len] = SIZE[o[1]];
-        if (o[6] === 1) { m.scale.set(len, 1, o[4]); m.position.set(X, hgt / 2, -(Z + o[4] / 2)); }   // crossing: side-on
-        else { m.scale.set(o[4], 1, len); m.position.set(X, hgt / 2, -(Z + len / 2)); }            // near face at Z
+        let hd = o.length > 7 ? o[7] : (o[6] === 1 ? 90 : 0);
+        if (n && n.length > 7) { let dh = ((n[7] - hd + 540) % 360) - 180; hd += dh * k; }
+        const r = hd * Math.PI / 180, ext = len / 2 * Math.abs(Math.cos(r)) + o[4] / 2 * Math.abs(Math.sin(r));
+        m.scale.set(o[4], 1, len); m.rotation.y = -r; m.position.set(X, hgt / 2, -(Z + ext));
       }
       m.visible = true; seen.add(key);
     }

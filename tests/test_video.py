@@ -200,3 +200,14 @@ def test_ground_scale_from_parked_cars():
     r = fit(cars, y_guess=280.0)
     assert r["ground_status"] == "calibrated"
     assert abs(r["horizon_px"] - yh) <= 2 and abs(r["ground_scale"] - S) / S < 0.1
+
+
+def test_ego_motion_moves_points_between_car_frames():
+    import numpy as np
+    from src.video.surround import to_earlier
+    # straight: a point 6 m ahead after driving 4 m was 10 m ahead before
+    X, Z = to_earlier(0.0, 6.0, d=4.0, a=0.0)
+    assert abs(X) < 1e-9 and abs(Z - 10.0) < 1e-9
+    # turned 90° right on the spot: 10 m ahead now = 10 m to the right before
+    X, Z = to_earlier(0.0, 10.0, d=0.0, a=np.pi / 2)
+    assert abs(X - 10.0) < 1e-9 and abs(Z) < 1e-9

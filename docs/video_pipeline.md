@@ -375,3 +375,36 @@ behind the car (hidden by the bonnet) continues the nearest ground seen.
 Colab robustness: a progress check that lost its connection hung for ever (no timeout on the CLI
 call) — every call now has a time limit, 10 failed checks in a row raise a clear error, and
 `dense.py --collect` downloads the results of a job that finished on a runtime still alive.
+
+## 3D view: ground memory, vehicle headings; a side-street detector (2026-10-24)
+
+**Ground memory** (`surround.py`). Our own motion from the video alone (`EgoMotion`: speed from
+scene flow in metres through the map route, rotation from yaw) carries the ground seen in earlier
+frames along: road hidden behind a car or under ours shows what was seen there a moment ago;
+fades after 8 s unseen (faster while turning — the rotation scale is uncertain at night). Only the
+sharp near field (≤ 20 m) is remembered: far ground is coarse and smeared into streaks.
+
+**Vehicle headings.** Measuring every vehicle's heading from its track minus our motion failed:
+our speed from the video is off by up to ~3 m/s over 0.2 s, so parked cars got headings and
+oncoming cars a median of 30°. Now from the traffic step's labels (image motion vs the road beside
+the vehicle): ahead / overtaking / parked 0°, oncoming 180°, crossing ±90° by its sideways motion;
+a measured heading only for turning / unlabelled vehicles moving ≥ 4 m/s.
+
+**Side-street detector** (`side_streets.py`, experimental, not used by the matching). Road surface
+reaching ≥ 3 m further sideways than the street's usual edge over ≥ 5 m of length, in the
+calibrated ground plan, merged by predicted passing time. Against GPS (correct side, ± 4 s):
+
+| | right side: precision / found | both sides: precision / found |
+|---|---|---|
+| old right-side opening cue, day | 25 % / 3 of 9 | — |
+| side_streets.py, day | 22 % / 8 of 9 | 21 % / 10 of 14 |
+| old right-side opening cue, night | 12 % / 2 of 7 | — |
+| side_streets.py, night | 23 % / 5 of 7 | 29 % / 8 of 10 |
+
+Much higher recall, same low precision — and in the matching it made things worse (physical
+junctions at the right moment 39 → 28 % day, 33 → 25 % night): the extra false openings mislead
+the alignment. Causes seen: occluders driving away (a trolleybus uncovering the opposite lanes),
+car-park entrances (real openings, not in the street map), timing. Tried and dropped: counting
+vehicles as road (parked rows became road, precision 7 %), rejecting openings with parked cars
+(real side streets have parked cars too, recall 71 → 14 %). Needs another cue to confirm a mouth
+(curb return, crosswalk, sign types, a vision-language check) before it can help the matching.

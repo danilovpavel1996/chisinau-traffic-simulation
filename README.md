@@ -40,7 +40,7 @@ method works.
 | Traffic measures (stops, queues before signals, speeds per street) | ✅ from GPS drives, combined over all drives in `data/video/aggregate/` |
 | **Spatial view**: what the camera sees, projected onto the ground, vs what the map expects | ✅ depth within ~7 % of GPS after calibration against the map |
 | **Camera self-calibration** (no specs, no GPS): field of view from map turns, depth from crosswalk approaches | ✅ dashcam "120°" measured as 99° (GPS check agrees); refuses when the evidence is inconsistent |
-| **Tesla-style 3D surround view**: road, lane markings, vehicles, traffic lights around the car | ✅ 5 frames/s, full-resolution segmentation (2026-10-24); works opened as a file too |
+| **Tesla-style 3D surround view**: road, lane markings, vehicles, traffic lights around the car | ✅ 5 frames/s, full-resolution segmentation; hidden road filled from earlier frames; vehicles facing their direction (2026-10-24) |
 | Distances in metres (no camera specs, no GPS positions) | ✅ scale from parked cars + the dashcam's speed; lens from GeoCalib; depth fitted to the road: crosswalks vs GPS 0.99 |
 | Dashboard: video · spatial view (3D / plan + map) · map (GPS point and video-only point) | ✅ `data/video/dashboard.html` |
 
@@ -164,9 +164,11 @@ In priority order. Review and reorder this list as priorities change.
       from the dashboard: `strip.py` stays as a possible detector input.)
    2. *Review together*: you watch the spatial view and mark where a junction or
       feature is missed; that drives the detector.
-   3. *Detector on the ground plan*: road opening left / right at a measured distance
-      ahead, crosswalks, stop lines — compared with the junction the map expects next.
-      Also vehicles crossing ahead.
+   3. *Detector on the ground plan*: first version `side_streets.py` (2026-10-24) finds most
+      real side streets (70–80 %) but ~4 in 5 detections are false (car parks, occluders);
+      in the matching it made results worse, so it is not used yet. Next: confirm a mouth with
+      a second cue (curb return, crosswalk, sign type) — your notes from the dashboard on
+      missed / false junctions are the best guide for which.
    4. *Traffic-sign types*: a yield sign (red triangle), stop, priority road, roundabout
       signs announce a junction tens of metres ahead and say which kind. Needs a
       sign-type detector (e.g. a YOLO model trained on the Mapillary traffic-sign
@@ -223,7 +225,8 @@ src/
     ground.py, lens.py   distance scale (parked cars + speed), lens (GeoCalib)
     depth.py             depth for every pixel (Depth Anything V2), fitted to the road plane
     bev.py               spatial view: what the camera sees vs what the map expects
-    surround.py          data for the Tesla-style 3D view
+    surround.py          data for the Tesla-style 3D view (ground memory, vehicle headings)
+    side_streets.py      experimental side-street detector on the ground plan
     strip.py             (not in the pipeline) the drive stitched into one straightened strip
     lanes.py, signs.py   lanes; street names / named places read in the video
     street_stats.py      stops, queues before signals, speeds per street (+ all drives)

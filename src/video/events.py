@@ -40,6 +40,8 @@ SIGNAL_NEAR = 0.035     # traffic-light box height / frame height: close enough 
 SIGNAL_CONF = 0.3       # median detector confidence of the cluster: red leaves through rain drops were
                         # "traffic lights" at 0.11–0.14; the real light passed at 509 s had 0.60 (2026_10_23)
 ROUNDABOUT_EXTRA = 90   # deg of rotation beyond the net angle that marks a roundabout
+OPENINGS = "road"   # "road" (road_geometry.py, right side) or "side_streets" (side_streets.py: more real
+                    # side streets found, but ~4 in 5 detections false — matching got worse: 39 → 28 % day, 33 → 25 % night)
 
 
 def cue_list(drv: dict) -> pd.DataFrame:
@@ -65,8 +67,11 @@ def cue_list(drv: dict) -> pd.DataFrame:
                 cues.append(dict(t=float(g.t.iat[-1]), kind="signal"))
     for r in stops(e).itertuples():
         cues.append(dict(t=float(r.t_end), kind="stop"))
-    rf = folder / "road.parquet"
-    if rf.exists():
+    sf, rf = folder / "side_streets.parquet", folder / "road.parquet"
+    if OPENINGS == "side_streets" and sf.exists():      # side streets from the calibrated ground plan, both sides
+        for t in pd.read_parquet(sf).t:
+            cues.append(dict(t=float(t), kind="opening"))
+    elif rf.exists():                                     # older cue: right-side widening of the road
         rd = pd.read_parquet(rf)
         for t in rd[rd.open_right].t:
             cues.append(dict(t=float(t), kind="opening"))
