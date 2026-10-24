@@ -408,3 +408,25 @@ car-park entrances (real openings, not in the street map), timing. Tried and dro
 vehicles as road (parked rows became road, precision 7 %), rejecting openings with parked cars
 (real side streets have parked cars too, recall 71 → 14 %). Needs another cue to confirm a mouth
 (curb return, crosswalk, sign types, a vision-language check) before it can help the matching.
+
+## Traffic-sign types (2026-10-24)
+
+`sign_types.py`: Mapillary "traffic sign (front)" regions every 6th frame → ResNet-18 trained on
+GTSRB (43 German classes, Vienna Convention like Moldova's) on Colab, once (models/). Crops saved.
+By eye: daylight yield 12/12, priority road 11/12, no entry 12/12, keep right 11/12 correct; at
+night priority road and no entry 12/12, "yield" mostly the backs of yield signs (still a junction);
+the blue arrow classes (ahead only) absorb Moldova's blue information / lane / pedestrian signs —
+GTSRB has no "other sign" class. Reliable junction classes vs GPS junctions (10-s window): day
+precision 68 % (chance 41 %), recall 62 %; night 37 % (chance 29 %). Priority-road signs come ~8 s
+before their junction, yield / keep-right at it. As a matching cue (also as a flag only, not moving
+the event time) it did not help: day 39 → 28 %, night 33 → 33 % — off (`events.USE_SIGNS`).
+
+## Speed from flow × depth (2026-10-24)
+
+Image motion depends on how far the scene is (narrow street vs open road). With metric depth each
+tracked point gives v = radial motion × fps × Z / (pixels from the vanishing point); the median
+over points is the car's speed. Test on 2026_10_23_10_06 (1 sample/s, one frame pair): correlation
+with GPS **0.79** (scene flow: 0.47), median error **9.2 km/h** (13.7) after one scale factor (raw
+0.79× GPS). `dense.py` now also tracks points through 3 adjacent frame pairs after each analysed
+frame (motion.parquet); `speed.py` turns them into km/h, scaled by the overlay speed if present,
+else the matched route length.

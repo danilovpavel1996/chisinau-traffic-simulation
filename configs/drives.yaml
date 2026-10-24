@@ -67,3 +67,23 @@
   destination: [47.056500, 28.891382]
   overlay:
     height_px: 46
+
+"2026_10_24_15_48":
+  video: data/video/raw/2026_10_24_15_48.mp4      # 6 dashcam clips joined (lossless)
+  description: Dashcam (front camera), afternoon / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  overlay:
+    height_px: 46
+
+"2026_10_24_17_08":
+  video: data/video/raw/2026_10_24_17_08.mp4      # 7 dashcam clips joined (lossless)
+  description: Dashcam (front camera), late afternoon / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  overlay:
+    height_px: 46

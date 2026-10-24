@@ -40,6 +40,11 @@ SIGNAL_NEAR = 0.035     # traffic-light box height / frame height: close enough 
 SIGNAL_CONF = 0.3       # median detector confidence of the cluster: red leaves through rain drops were
                         # "traffic lights" at 0.11–0.14; the real light passed at 509 s had 0.60 (2026_10_23)
 ROUNDABOUT_EXTRA = 90   # deg of rotation beyond the net angle that marks a roundabout
+USE_SIGNS = False      # junction signs as a matching cue: correct signs, but matching did not improve
+                        # (day 39 → 28 %, night 33 → 33 %, 2026-10-24) — kept for display and later
+SIGN_PROB = 0.85
+JUNCTION_SIGNS = {"yield", "priority road", "stop", "no entry", "keep right", "keep left", "roundabout",
+                  "right of way at next junction"}     # reliable GTSRB classes (blue arrows: confused with info signs)
 OPENINGS = "road"   # "road" (road_geometry.py, right side) or "side_streets" (side_streets.py: more real
                     # side streets found, but ~4 in 5 detections false — matching got worse: 39 → 28 % day, 33 → 25 % night)
 
@@ -67,6 +72,14 @@ def cue_list(drv: dict) -> pd.DataFrame:
                 cues.append(dict(t=float(g.t.iat[-1]), kind="signal"))
     for r in stops(e).itertuples():
         cues.append(dict(t=float(r.t_end), kind="stop"))
+    sg = folder / "sign_types.parquet"
+    if USE_SIGNS and sg.exists():                         # junction signs (sign_types.py): last sighting
+        s = pd.read_parquet(sg)
+        s = s[(s.prob >= SIGN_PROB) & s.name.isin(JUNCTION_SIGNS)].sort_values("t")
+        for _, g in s.groupby("name"):
+            for _, c in g.groupby((g.t.diff() > 1.5).cumsum()):
+                if len(c) >= 2:
+                    cues.append(dict(t=float(c.t.max()), kind="sign"))
     sf, rf = folder / "side_streets.parquet", folder / "road.parquet"
     if OPENINGS == "side_streets" and sf.exists():      # side streets from the calibrated ground plan, both sides
         for t in pd.read_parquet(sf).t:
@@ -85,17 +98,20 @@ def merge(cues: pd.DataFrame) -> pd.DataFrame:
         if cur is None or c.t - cur["t_last"] > MERGE_S:
             if cur and cur["cues"] != {"stop"}:
                 events.append(cur)
-            cur = dict(t_first=c.t, t_last=c.t, cues=set(), turn_deg=0.0)
+            cur = dict(t_first=c.t, t_last=c.t, cues=set(), turn_deg=0.0, times=[])
         cur["cues"].add(c.kind)
         cur["t_last"] = c.t
+        if c.kind != "sign":            # a sign is seen before / after its junction: it flags the event,
+            cur["times"].append(c.t)    # it does not set its time
         if c.kind in ("turn", "roundabout") and abs(c.turn_deg) > abs(cur["turn_deg"]):
             cur["turn_deg"] = c.turn_deg
     if cur and cur["cues"] != {"stop"}:
         events.append(cur)
-    out = pd.DataFrame([dict(t=(e["t_first"] + e["t_last"]) / 2, turn_deg=round(e["turn_deg"]),
+    when = lambda e: (min(e["times"]) + max(e["times"])) / 2 if e["times"] else (e["t_first"] + e["t_last"]) / 2
+    out = pd.DataFrame([dict(t=when(e), turn_deg=round(e["turn_deg"]),
                              roundabout="roundabout" in e["cues"], crosswalk="crosswalk" in e["cues"],
                              signal="signal" in e["cues"], stopped="stop" in e["cues"],
-                             opening="opening" in e["cues"],
+                             opening="opening" in e["cues"], sign="sign" in e["cues"],
                              cues="+".join(sorted(e["cues"]))) for e in events])
     return out
 

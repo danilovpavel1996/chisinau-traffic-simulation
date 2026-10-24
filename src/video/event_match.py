@@ -55,7 +55,7 @@ FEATURES = ROOT / "data" / "osm" / "junction_features.parquet"
 
 # detection reliability (daylight) → costs
 MISS = dict(turn=3.0, roundabout=3.0, signal=1.0, crossing=0.6, junction=0.15)
-FALSE = dict(turn=2.5, crosswalk=1.2, signal=0.8, small_turn=0.5, opening=0.35)
+FALSE = dict(turn=2.5, crosswalk=1.2, signal=0.8, small_turn=0.5, opening=0.35, sign=0.5)
 RERANK = 30             # best routes by alignment that are re-scored on road width
 WIDTH_WEIGHT = 0.0      # cost reduction per unit of width correlation (video vs map road size) — off:
                         # it never helped (10_21AM: no change; 10_23: flipped the right route to a wrong one)
@@ -278,6 +278,8 @@ def false_cost(e) -> float:
         return FALSE["signal"]
     if getattr(e, "opening", False) and abs(e.turn_deg) <= TURN:
         return FALSE["opening"]
+    if getattr(e, "sign", False):
+        return FALSE["sign"]
     return FALSE["small_turn"]
 
 
@@ -301,6 +303,8 @@ def match_cost(e, s) -> float:
         c += -1.0 if s.crossing else 0.8                                 # OSM misses crossings → mild
     if e.signal:
         c += -1.0 if s.signal else 0.5
+    if getattr(e, "sign", False):
+        c += -0.6 if s.junction else 0.4                                 # a junction sign: yield, priority, stop…
     if getattr(e, "opening", False):
         c += -0.4 if s.junction else 0.4                                 # a side street opens at junctions
     if not s.junction and not e.crosswalk and not e.signal:
