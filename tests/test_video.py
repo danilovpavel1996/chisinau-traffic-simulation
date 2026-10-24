@@ -211,3 +211,24 @@ def test_ego_motion_moves_points_between_car_frames():
     # turned 90° right on the spot: 10 m ahead now = 10 m to the right before
     X, Z = to_earlier(0.0, 10.0, d=0.0, a=np.pi / 2)
     assert abs(X - 10.0) < 1e-9 and abs(Z) < 1e-9
+
+
+def test_speed_from_flow_and_depth_ignores_turning_and_windscreen_dirt():
+    import numpy as np
+    from src.video.speed import fit_motion
+    rng = np.random.default_rng(1)
+    n = 3000
+    x, y = rng.uniform(-0.8, 0.8, n), rng.uniform(-0.4, 0.3, n)     # focal-length units
+    Z = rng.uniform(4, 80, n)
+    ey, T, wx, wy, wz = 0.05, 0.5, 0.001, 0.01, 0.0005              # 0.5 m per frame, turning right
+    du = (x - 0.0) * T / Z + x * y * wx - (1 + x ** 2) * wy + y * wz
+    dv = (y - ey) * T / Z + (1 + y ** 2) * wx - x * y * wy - x * wz
+    du, dv = du + rng.normal(0, 0.0005, n), dv + rng.normal(0, 0.0005, n)
+    dirt = rng.random(n) < 0.25                                      # raindrops: tracked but still
+    du[dirt], dv[dirt] = 0.0, 0.0
+    t, rot, _, _ = fit_motion(x, y, du, dv, Z, 0.0, ey, still_n=0.3 / 600)
+    assert abs(t - T) / T < 0.08
+    assert abs(rot[1] - wy) < 0.002
+    # standing still with only dirt and noise: no speed
+    t0, _, _, _ = fit_motion(x, y, rng.normal(0, 1e-4, n), rng.normal(0, 1e-4, n), Z, 0.0, ey, still_n=0.3 / 600)
+    assert abs(t0) < 0.05

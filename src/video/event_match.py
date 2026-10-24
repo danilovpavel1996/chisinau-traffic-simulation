@@ -373,6 +373,9 @@ def align(ev: pd.DataFrame, sites: pd.DataFrame, m_ev: np.ndarray, m_total: floa
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+USE_SPEED = False
+
+
 def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
     """
     Cumulative video speed index over the street window — distance up to an unknown
@@ -383,6 +386,9 @@ def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
     speed depends on the road's tilt and read 2× too high going downhill on Mircești,
     putting the car 500 m ahead in the first minute (2026_10_23). With scene flow the
     position at junction moments is within 30 m for 8 of 18 junctions (road plane: 5).
+
+    If speed.py has run (flow × metric depth, 0.85 correlation with GPS vs 0.47 for scene
+    flow), its speed is used instead — never GPS-scaled: kmh_raw.
     """
     folder, cam = drv["folder"], drv["camera"]
     meta = json.loads((folder / "meta.json").read_text())
@@ -390,6 +396,10 @@ def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
     t0, t1 = drv.get("street_window_s", [e.t.min(), e.t.max()])
     e = e[(e.t >= t0) & (e.t <= t1)]
     v = np.where(e.moving, e.flow_smooth.fillna(0).clip(lower=0), 0.0)
+    sp = folder / "speed.parquet"
+    if USE_SPEED and sp.exists():
+        s = pd.read_parquet(sp).dropna(subset=["kmh_raw"])
+        v = np.where(e.moving, np.interp(e.t, s.t, s.kmh_raw) / 3.6, 0.0)
     v = pd.Series(v).rolling(15, center=True, min_periods=1).median().to_numpy()   # ~3 s: kill spikes
     return e.t.to_numpy(), np.cumsum(v * e.t.diff().fillna(0).to_numpy())
 

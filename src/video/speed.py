@@ -3,28 +3,37 @@ speed.py
 --------
 Our speed from the video, in km/h: optical flow × metric depth.
 
-Driving forward at v, a scene point at distance Z, r pixels from the vanishing point,
-moves away from it at  v · r / Z  pixels per second. So each tracked point gives
+Driving forward, a scene point at depth Z moves away from the vanishing point by T·r/Z per
+frame (T metres driven, r its distance from the vanishing point in focal-length units), so
+each tracked point gives T = radial motion · Z / r — metric, the same in a narrow street
+(buildings 10 m away stream past fast) and in the open (fields 200 m away barely move),
+where plain image motion confuses the two. Per analysed frame (5 per second):
 
-    v = radial motion × fps × Z / r
+    points     tracked through FLOW_PAIRS adjacent frame pairs (dense.py), vehicles excluded,
+               undistorted (the wide lens squeezes motion near the edges)
+    depth      Depth Anything fitted to the road plane (depth.metric), rescaled per frame by
+               this frame's own road pixels (frame_factor: the model's scale wanders)
+    rotation   fitted to distant points (turning and pitching move them, driving hardly does)
+               and removed from all points
+    speed      median T over near points; still points dropped when most move (raindrops,
+               the dashboard's reflection in the windscreen)
 
-and the median over the points (vehicles excluded) is the car's speed — metric, and the
-same in a narrow street (buildings 10 m away stream past fast) and in the open (fields
-200 m away barely move), where plain image motion confuses the two. Points come from
-dense.py (FLOW_PAIRS adjacent frame pairs after each analysed frame, 5 per second), depth
-from Depth Anything fitted to the road plane (depth.metric).
+The result is metric without calibration (2026_10_23_10_06: 0.99× GPS). If the video has
+the dashcam's speed overlay, that one factor is still taken from it (GPS speed only, never
+positions).
 
-One scale factor remains (2026_10_23_10_06: the raw estimate read 0.79× GPS): calibrated
-per drive from the dashcam's speed overlay when the video has one (GPS speed only, never
-positions), else so that the distance driven equals the matched route's length.
-
-    2026_10_23_10_06, 1 sample/s, 1 pair: correlation with GPS 0.79 (scene flow: 0.47),
-    median error 9.2 km/h (13.7)
+    2026_10_23_10_06 vs GPS          correlation   median error   90 % within
+    scene flow (event_match)             0.47        13.7 km/h
+    radial flow × depth, 1 pair          0.79         9.2
+    + undistort, rotation removed        0.81         7.4
+    + per-frame depth, 2-s median        0.84         6.6
+    + windscreen points dropped          0.85         6.7         20.8 km/h
 
 Usage:
     .venv-video/bin/python -m src.video.speed <drive>
 
-Output: data/video/processed/<drive>/speed.parquet (t, kmh, kmh_raw, points); speed_* keys in calibration.json
+Output: data/video/processed/<drive>/speed.parquet (t, kmh, kmh_raw, yaw_dps, depth_k, points);
+        speed_* keys in calibration.json
 """
 
 from __future__ import annotations
@@ -40,62 +49,149 @@ from src.video import depth as depth_mod
 from src.video import drives
 from src.video.bev import Geometry
 
-MIN_R_PX = 60            # points close to the vanishing point move too little to measure
-Z_RANGE_M = (2.0, 60.0)
+Z_RANGE_M = (3.0, 80.0)
+FAR_M = 30.0             # rotation from points this far (forward motion barely moves them)
+NEAR_MAX_M = 40.0        # speed from points nearer than this
+STILL_PX = 0.3           # a point moving less than this (pixels per frame) …
+MOVING_SHARE = 0.4       # … is windscreen dirt if at least this share of points move
+MIN_R = 0.1              # … and at least this far from the vanishing point (focal-length units)
 MIN_POINTS = 30
-SMOOTH_S = 1.0           # median over this window
+SMOOTH_S = 2.0           # median over this window
+FRAME_FIT_M = (6.0, 25.0)  # road pixels used to rescale each frame's depth
+FRAME_FIT_MIN = 300
+FRAME_FIT_CLIP = (0.6, 1.6)
 
 
-def raw_speed(drv: dict) -> pd.DataFrame:
+def fit_motion(xn, yn, du, dv, Z, ex: float, ey: float, still_n: float) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+    """Speed per frame from tracked points with known depth (pinhole, normalised coordinates).
+
+    The car moves along its heading, toward the vanishing point (ex, ey). A point at depth Z,
+    at (x, y) in focal-length units, moves by
+        du = (x − ex)·T/Z + x·y·wx − (1 + x²)·wy + y·wz
+        dv = (y − ey)·T/Z + (1 + y²)·wx − x·y·wy − x·wz
+    (T metres, w radians, per frame). Rotation moves points regardless of their distance,
+    forward motion hardly moves distant ones: so the rotation is fitted to distant points
+    (Z ≥ FAR_M, robust least squares), removed from all, and every remaining point gives
+    T = radial motion · Z / distance from the vanishing point; the median is the speed.
+    (Fitting T and w together let the rotation absorb part of the speed — a steady
+    −10°/s "turn" on straight roads; correlation with GPS 0.68.)
+    still_n: STILL_PX in focal-length units.
+    Returns (T, [wx, wy, wz], T of each point used, which points)."""
+    # raindrops and the dashboard's reflection on the windscreen stay put in the image: drop
+    # still points when most points move (else the car itself stands still)
+    still = np.hypot(du, dv) < still_n
+    use = ~still if (~still).sum() >= MOVING_SHARE * len(still) else np.ones_like(still)
+    far = use & (Z >= FAR_M)
+    if far.sum() < MIN_POINTS:
+        far = use & (Z >= np.percentile(Z[use], 70))
+    xf, yf = xn[far], yn[far]
+    A = np.vstack([np.column_stack([xf * yf, -(1 + xf ** 2), yf]),
+                   np.column_stack([1 + yf ** 2, -xf * yf, -xf])])
+    b = np.concatenate([du[far], dv[far]])
+    w = np.ones_like(b)
+    for _ in range(5):
+        sw = np.sqrt(w)
+        rot = np.linalg.lstsq(A * sw[:, None], b * sw, rcond=None)[0]
+        res = np.abs(A @ rot - b)
+        c = 1.345 * max(np.median(res) / 0.6745, 1e-6)
+        w = np.where(res <= c, 1.0, c / np.maximum(res, 1e-12))
+    wx, wy, wz = rot
+    ru = du - (xn * yn * wx - (1 + xn ** 2) * wy + yn * wz)
+    rv = dv - ((1 + yn ** 2) * wx - xn * yn * wy - xn * wz)
+    ox, oy = xn - ex, yn - ey
+    r = np.hypot(ox, oy)
+    near = use & (r > MIN_R) & (Z < NEAR_MAX_M)
+    T = (ru * ox + rv * oy)[near] / r[near] * Z[near] / r[near]
+    return (float(np.median(T)) if len(T) >= MIN_POINTS else np.nan), rot, T, near
+
+
+def frame_factor(geo: Geometry, row: dict, D: np.ndarray) -> float:
+    """This frame's depth error: Depth Anything's scale wanders from frame to frame (one drive-wide
+    fit, depth.fit_to_ground, leaves e.g. 69 km/h read as 19). The road plane gives every road
+    pixel's true distance, so the median ratio over this frame's road pixels rescales it."""
+    from src.video.depth import GROUND
+    from src.video.scene import CODES
+    m = np.frombuffer(zlib.decompress(row["mask"]), np.uint8).reshape(json.loads(row["mask_shape"]))
+    rr, cc = np.nonzero(np.isin(m, [CODES.index(c) for c in GROUND]))
+    y, x = row["top"] + (rr + 0.5) * row["step"], (cc + 0.5) * row["step"]
+    xu, yu = geo.undistort(x, y)
+    ok = (yu > geo.y_h + 4) & (y < geo.bonnet - 4)
+    Zg = geo.fz * geo.h / (yu[ok] - geo.y_h)
+    Zd = D[np.clip((y[ok] / depth_mod.DOWN).astype(int), 0, D.shape[0] - 1),
+           np.clip((x[ok] / depth_mod.DOWN).astype(int), 0, D.shape[1] - 1)]
+    keep = (Zg > FRAME_FIT_M[0]) & (Zg < FRAME_FIT_M[1])
+    if keep.sum() < FRAME_FIT_MIN:
+        return 1.0
+    return float(np.clip(np.median(Zg[keep] / Zd[keep]), *FRAME_FIT_CLIP))
+
+
+def raw_speed(drv: dict, points: list | None = None) -> pd.DataFrame:
+    """Speed per analysed frame. points: if a list, every used point is added to it
+    (t, class, Z, x, y, km/h) — to study which parts of the scene read too fast or slow."""
     folder = drv["folder"]
     meta = json.loads((folder / "meta.json").read_text())
     fps = meta["fps"]
     geo = Geometry(drv, pd.read_parquet(folder / "scene_dense.parquet").iloc[0])
     motion = pd.read_parquet(folder / "motion.parquet")
+    dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t").reset_index(drop=True)
+    dense_t = dense.t.to_numpy()
     td, maps = depth_mod.load(drv)
-    centre = np.array([geo.cx, geo.y_h])
     rows = []
     for t, g in motion.groupby("t"):
         j = int(np.argmin(np.abs(td - t)))
         if abs(td[j] - t) > 0.05:
             continue
         D = depth_mod.metric(drv, maps[j])
-        vs = []
+        i = int(np.argmin(np.abs(dense_t - t)))
+        k = frame_factor(geo, dense.iloc[i].to_dict(), D) if abs(dense_t[i] - t) < 0.05 else 1.0
+        D = D * k
+        if points is not None and abs(dense_t[i] - t) < 0.05:
+            row = dense.iloc[i]
+            cmap = np.frombuffer(zlib.decompress(row["mask"]), np.uint8).reshape(json.loads(row["mask_shape"]))
+        ms = []
         for r in g.itertuples():
             a = np.frombuffer(zlib.decompress(r.pts), np.float16).reshape(-1, 4).astype(np.float32)
             p, d = a[:, :2], a[:, 2:]
-            rv = p - centre
-            rr = np.linalg.norm(rv, axis=1)
-            radial = (d * rv).sum(1) / np.maximum(rr, 1e-6)
             Z = D[np.clip((p[:, 1] / depth_mod.DOWN).astype(int), 0, D.shape[0] - 1),
                   np.clip((p[:, 0] / depth_mod.DOWN).astype(int), 0, D.shape[1] - 1)]
-            ok = (rr > MIN_R_PX) & (Z > Z_RANGE_M[0]) & (Z < Z_RANGE_M[1]) & (p[:, 1] < geo.bonnet - 5)
-            vs.append(radial[ok] * fps * Z[ok] / rr[ok])
-        v = np.concatenate(vs) if vs else np.array([])
-        rows.append(dict(t=float(t), kmh_raw=float(np.median(v)) * 3.6 if len(v) >= MIN_POINTS else np.nan, points=len(v)))
+            ok = (Z > Z_RANGE_M[0]) & (Z < Z_RANGE_M[1]) & (p[:, 1] < geo.bonnet - 5)
+            if ok.sum() < MIN_POINTS:
+                continue
+            # undistort both ends of each track: the wide lens squeezes motion near the edges
+            x0, y0 = geo.undistort(p[ok, 0], p[ok, 1])
+            x1, y1 = geo.undistort(p[ok, 0] + d[ok, 0], p[ok, 1] + d[ok, 1])
+            xn, yn = (x0 - geo.cx) / geo.fl, (y0 - geo.cy) / geo.fl
+            T, rot, Tp, near = fit_motion(xn, yn, (x1 - x0) / geo.fl, (y1 - y0) / geo.fl, Z[ok], 0.0, (geo.y_h - geo.cy) / geo.fl,
+                                STILL_PX / geo.fl)
+            ms.append((T, rot[1]))
+            if points is not None and len(Tp):
+                px, py = p[ok][near, 0], p[ok][near, 1]
+                ri = ((py - row["top"]) / row["step"]).astype(int)
+                cls = np.where(ri >= 0, cmap[np.clip(ri, 0, cmap.shape[0] - 1),
+                                             np.clip((px / row["step"]).astype(int), 0, cmap.shape[1] - 1)], 255)
+                points.append(pd.DataFrame(dict(t=float(t), cls=cls, Z=Z[ok][near], x=px, y=py, kmh=Tp * fps * 3.6)))
+        ms = [m for m in ms if np.isfinite(m[0])]
+        if ms:
+            m = np.median(ms, axis=0)
+            rows.append(dict(t=float(t), kmh_raw=max(float(m[0]), 0.0) * fps * 3.6,
+                             yaw_dps=float(np.degrees(m[1]) * fps), depth_k=k, points=len(ms)))
+        else:
+            rows.append(dict(t=float(t), kmh_raw=np.nan, yaw_dps=np.nan, depth_k=k, points=0))
     df = pd.DataFrame(rows).sort_values("t").reset_index(drop=True)
     win = max(1, int(round(SMOOTH_S * 5)))
-    df["kmh_raw"] = df.kmh_raw.clip(lower=0).interpolate(limit=10).rolling(win, center=True, min_periods=1).median()
+    df["kmh_raw"] = df.kmh_raw.interpolate(limit=10).rolling(win, center=True, min_periods=1).median()
     return df
 
 
 def scale(drv: dict, df: pd.DataFrame) -> tuple[float, str]:
-    """One factor per drive: from the overlay's GPS speed if there is one, else the matched route's length."""
+    """One factor per drive from the overlay's GPS speed if there is one; else none (already metric)."""
     gps = drives.gps_track(drv)
     if gps is not None:
         v = np.interp(df.t, gps.video_s, gps.speed_kmh)
         ok = (v > 10) & (df.kmh_raw > 5)
         if ok.sum() > 50:
             return float(np.median(v[ok] / df.kmh_raw[ok])), "dashcam speed overlay"
-    em = drv["folder"] / "event_match.json"
-    if em.exists():
-        L = json.loads(em.read_text())["route"]["d"][-1]
-        t0, t1 = drv.get("street_window_s", [df.t.min(), df.t.max()])
-        w = df[(df.t >= t0) & (df.t <= t1)]
-        driven = float((w.kmh_raw.fillna(0) / 3.6 * w.t.diff().fillna(0)).sum())
-        if driven > 0:
-            return L / driven, "matched route length"
-    return 1.0, "none"
+    return 1.0, "none (metric from depth)"
 
 
 def run(drv: dict) -> pd.DataFrame:

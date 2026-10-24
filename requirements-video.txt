@@ -18,3 +18,4 @@ networkx>=3.0
 pytest>=8
 transformers>=4.40,<4.47   # Mask2Former (scene.py); newer versions want a newer torch
 scipy>=1.11,<1.15
+scikit-learn>=1.5            # speed_model.py (video speed correction)

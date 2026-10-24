@@ -423,9 +423,11 @@ OUTPUTS = ["detections.parquet", "ego.parquet", "meta.json"]
 
 def upload_copy(drv: dict) -> Path:
     """
-    A ~3× smaller copy of the video for the upload: same 1080p frames and frame numbers (so
-    every time and pixel measured stays the same), stronger H.264 compression. A 1.3 GB upload
-    takes ~10 min, long enough for a free Colab runtime to be reclaimed half-way (2026_10_23_19_26).
+    A smaller copy of the video for the upload: same 1080p frames and frame numbers (so every
+    time and pixel measured stays the same), stronger H.264 compression (CRF 30: ~0.7 MB per
+    second of video; the detector sees 640-px images anyway). A long upload gives a free Colab
+    runtime time to be reclaimed half-way (2026_10_23_19_26 at 1.3 GB; 2026_10_24_17_08 at CRF 23,
+    1.8 GB).
     Encoded with 4 threads at low priority: slower, but the laptop stays quiet.
     """
     out = drv["folder"] / "colab" / f"{drv['key']}_upload.mp4"
@@ -433,7 +435,7 @@ def upload_copy(drv: dict) -> Path:
         out.parent.mkdir(exist_ok=True)
         print(f"compressing the video for upload → {out.name}…", flush=True)
         subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-stats", "-y", "-i", str(drv["video"]), "-map", "0:v:0",
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "4", "-pix_fmt", "yuvj420p",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-threads", "4", "-pix_fmt", "yuvj420p",
                         "-vsync", "passthrough", "-an", str(out)], check=True)
     return out
 
