@@ -50,6 +50,7 @@ STYLE = {                     # BGR, Tesla-like: dark scene, white paint
 DARK = (20, 16, 14)
 KINDS = ["car", "bus", "truck", "motorcycle", "traffic_light"]
 LIGHTS = {"red": 1, "yellow": 2, "green": 3}
+LANDMARK_ID = 1_000_000          # ids of traffic-light landmarks (world.py), apart from track ids
 WIDTH_M = {"car": (1.6, 2.1), "bus": (2.4, 2.6), "truck": (2.2, 2.6), "motorcycle": (0.6, 1.0)}
 DEPTH_SYNC_S = 0.26           # use a depth map at most this far from the detection frame
 MEMORY_S = 8.0                # ground not seen again for this long fades out …
@@ -63,7 +64,15 @@ MEASURED_MIN_MS = 4.0         # a measured heading only for vehicles clearly mov
 
 class EgoMotion:
     """Our car's motion from the video alone: distance (video speed, metres through the map
-    route) and rotation (yaw), cumulative over time."""
+    route) and rotation (yaw), cumulative over time. With speed.py's output: world.Pose instead
+    (metric speed, rotation from distant points — the yaw here scales with the assumed field of
+    view and read turns 1.4–2.8× too large)."""
+
+    def __new__(cls, drv: dict):
+        if (drv["folder"] / "speed.parquet").exists():
+            from src.video.world import Pose
+            return Pose(drv)
+        return super().__new__(cls)
 
     def __init__(self, drv: dict):
         from src.video.event_match import odometer
@@ -186,6 +195,11 @@ def objects(drv: dict, geo: Geometry) -> list:
         patch = D[max(r0, 0):min(r1, D.shape[0]), max(c0, 0):min(c1, D.shape[1])]
         return float(np.median(patch)) if patch.size else None
 
+    marks = None
+    if (folder / "speed.parquet").exists():                 # traffic lights as fixed landmarks (world.py)
+        from src.video import world
+        pose = world.Pose(drv)
+        marks, light_obs = world.lights(drv, geo, pose)
     out = []
     bar = progress(det.frame.nunique(), "surround objects")
     for t, g in det.sort_values("t").groupby("t"):
@@ -193,6 +207,8 @@ def objects(drv: dict, geo: Geometry) -> list:
         for b in g.itertuples():
             kind = KINDS.index(b.cls)
             xc = (b.x1 + b.x2) / 2
+            if b.cls == "traffic_light" and marks is not None:
+                continue
             if b.cls == "traffic_light":
                 Z = depth_at(t, b.x1, b.y1, b.x2, b.y2)
                 if Z is None or not 3 < Z < 70:
@@ -217,11 +233,38 @@ def objects(drv: dict, geo: Geometry) -> list:
             lo, hi = WIDTH_M[b.cls]
             rows.append([int(b.track_id), kind, round(X, 2), round(Z, 2), round(float(np.clip(w, lo, hi)), 2), 0,
                          int(labels.get(b.track_id) == "crossing")])
+        if marks is not None:
+            vis = marks[(marks.t_first - world.SHOW_BEFORE_S <= t) & (marks.t_last + world.SHOW_AFTER_S >= t)]
+            if len(vis):
+                X, Z = pose.to_car(t, vis.x.to_numpy(), vis.z.to_numpy())
+                for m, x_, z_ in zip(vis.itertuples(), X, Z):
+                    if -15 < z_ < 90 and abs(x_) < 40:
+                        rows.append([LANDMARK_ID + int(m.id), KINDS.index("traffic_light"), round(float(x_), 2),
+                                     round(float(z_), 2), 0.4, round(m.y, 2),
+                                     LIGHTS.get(world.light_colour(light_obs, m.id, t), 0)])
         out.append([round(float(t), 2), rows])
         bar.update(1)
     bar.close()
+    if marks is not None:
+        smooth_vehicles(out, pose, labels)
+        print(f"   {len(marks)} traffic lights as landmarks ({(light_obs.mark >= 0).mean():.0%} of light detections)", flush=True)
     add_headings(out, EgoMotion(drv), labels)
     return out
+
+
+def smooth_vehicles(frames: list, pose, labels: dict):
+    """Vehicle positions smoothed per track in the ground frame (world.smooth_tracks): parked cars
+    stand still, moving ones move smoothly instead of jumping with each frame's box and depth."""
+    from src.video.world import smooth_tracks
+    light = KINDS.index("traffic_light")
+    refs = [(t, o) for t, rows in frames for o in rows if o[1] != light]
+    if not refs:
+        return
+    df = pd.DataFrame(dict(t=[t for t, _ in refs], track_id=[o[0] for _, o in refs],
+                           X=[o[2] for _, o in refs], Z=[o[3] for _, o in refs]))
+    df = smooth_tracks(df, pose, labels)
+    for (t, o), x, z in zip(refs, df["xs"].to_numpy(), df["zs"].to_numpy()):
+        o[2], o[3] = round(float(x), 2), round(float(z), 2)
 
 
 def add_headings(frames: list, ego: EgoMotion, labels: dict):

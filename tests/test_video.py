@@ -249,3 +249,19 @@ def test_overlay_repairs_a_long_digit_misread():
     good = out[~out.bad]
     assert len(good) > 0.9 * len(t)
     assert np.abs(good.lat.to_numpy() - np.interp(good.video_s, t, lat)).max() < 1e-6
+
+
+def test_traffic_light_landmark_from_lines_of_sight_and_noisy_depth():
+    import numpy as np
+    import pandas as pd
+    from src.video.world import solve
+    rng = np.random.default_rng(2)
+    light = np.array([6.0, 45.0])                                    # 6 m right, 45 m along the road
+    oz = np.linspace(0, 35, 20)                                      # we drive 35 m towards it
+    ox = np.zeros_like(oz)
+    ang = np.arctan2(light[0] - ox, light[1] - oz) + rng.normal(0, 0.005, len(oz))
+    true_d = np.hypot(light[0] - ox, light[1] - oz)
+    obs = pd.DataFrame(dict(ox=ox, oz=oz, ux=np.sin(ang), uz=np.cos(ang),
+                            depth=true_d * rng.normal(1, 0.25, len(oz))))   # one frame's depth: ±25 %
+    x, z, rms = solve(obs)
+    assert np.hypot(x - light[0], z - light[1]) < 1.5 and rms < 0.5
