@@ -489,3 +489,22 @@ distance between them. Dead-reckoned from the start alone it drifts up to ~400 m
 
 Speed vs GPS, whole drives, no calibration: correlation 0.93 / 0.90 / 0.82 / 0.93, median
 error 4.8 / 3.6 / 8.8 / 3.5 km/h (day / night / out of town / city).
+
+### 3D view: world frame, light landmarks, road from many frames, lanes (2026-10-25)
+
+- `world.py` — our pose (x, z, heading) from speed.py, integrated. Traffic lights become
+  landmarks: detections grouped by geometry (tracker ids for lights were useless: half the light
+  tracks ≤ 4 detections, one id over 649), position = least squares over all lines of sight and
+  depth readings (consistent within 0.3–0.65 m; a single frame's position wobbled 2–6 m), drawn
+  with a pole, colour held 3 s. 76 landmarks on 2026_10_24_17_08.
+- Vehicles smoothed per track in the ground frame, parked cars fixed: frame-to-frame jump
+  1.49 → 0.17 m median (90 %: 10.3 → 2.6 m), parked cars 5.8 m → 0.
+- `ground_world.py` — the road from all frames 12 s before … 6 s after, in the ground frame
+  (sliding sums on a raster that moves with the car, 10-cm cells): lane lines continuous instead
+  of breaking up per frame, gaps behind cars and under our car filled. ~6 min per 20-min drive.
+- Lanes: lines, curbs and the road's extent read every 5 m ahead (lanes_world.parquet); lanes not
+  painted or not seen are spaced by the road's own lane width out to its edge; moving vehicles
+  are pulled to the middle of their lane — 48 % of moving-vehicle positions fall in a lane
+  (only lines actually read: 24 %); the rest mostly at junctions and in turns.
+- Waiting for a Colab GPU: `detect_test.py` (5/10/15/30 fps tracking, tiled detection of
+  distant lights) on three clips of 2026_10_24_17_08.

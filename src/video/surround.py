@@ -4,7 +4,9 @@ surround.py
 Data for the Tesla-style surround view in the dashboard: the road around the car
 and every detected vehicle and traffic light, in metres, 5 times a second.
 
-    ground   surround_ground.mp4 — the ground plan (5 frames/s) in a clean style: dark
+    ground   surround_ground.mp4 — with speed.py's output: ground_world.py, the road from all
+             frames within 12 s before / 6 s after in the fixed ground frame (stable lane lines,
+             no gaps behind cars). Without it, per frame: the ground plan (5 frames/s) in a clean style: dark
              road, white lane markings and crosswalks, dim sidewalk and curbs; undistorted,
              calibrated geometry (bev.Geometry), no map overlay. With memory: the ground
              seen in earlier frames is carried along with our own motion, so road hidden
@@ -41,6 +43,7 @@ from src.video.compute import progress
 from src.video.scene import CODES, DENSE_FPS, WIDTH
 
 PX_PER_M = 32            # ground texture: 1024 × 1536 px
+WORLD_PX_PER_M = 16      # … from the windowed raster (10-cm cells): 512 × 768 px
 X_RANGE = (-16.0, 16.0)
 Z_RANGE = (-4.0, 44.0)
 STYLE = {                     # BGR, Tesla-like: dark scene, white paint
@@ -50,6 +53,11 @@ STYLE = {                     # BGR, Tesla-like: dark scene, white paint
 DARK = (20, 16, 14)
 KINDS = ["car", "bus", "truck", "motorcycle", "traffic_light"]
 LIGHTS = {"red": 1, "yellow": 2, "green": 3}
+LANE_W = (2.4, 4.6)           # m between two lines (or line and curb) that make a lane
+LANE_DEFAULT_M = 3.2         # lane width where no two lines show it
+LANE_BORROW_M = 10.0          # a band with no lines takes those of a band this near
+X_RANGE_LANES = 14.0          # lanes inferred out to this far sideways
+LANE_PULL = 0.8               # share of the way to the lane's middle a vehicle is moved
 LANDMARK_ID = 1_000_000          # ids of traffic-light landmarks (world.py), apart from track ids
 WIDTH_M = {"car": (1.6, 2.1), "bus": (2.4, 2.6), "truck": (2.2, 2.6), "motorcycle": (0.6, 1.0)}
 DEPTH_SYNC_S = 0.26           # use a depth map at most this far from the detection frame
@@ -247,9 +255,82 @@ def objects(drv: dict, geo: Geometry) -> list:
     bar.close()
     if marks is not None:
         smooth_vehicles(out, pose, labels)
+        if (folder / "lanes_world.parquet").exists():
+            snap_to_lanes(out, pd.read_parquet(folder / "lanes_world.parquet"), labels)
         print(f"   {len(marks)} traffic lights as landmarks ({(light_obs.mark >= 0).mean():.0%} of light detections)", flush=True)
     add_headings(out, EgoMotion(drv), labels)
     return out
+
+
+def lane_bounds(g: pd.DataFrame) -> np.ndarray:
+    """Lane boundaries across one 5-m band: the lines read there, plus the lanes not painted or not
+    seen — usually only our own lane's two lines are (median 2 per band; 35 % of moving vehicles sat
+    beyond them, 18 % in a gap too wide for one lane). Missing ones are spaced by this road's own
+    lane width out to where the road surface (or the curb) ends; a gap of two lanes is split."""
+    lines = np.sort(g[g.kind == "line"].x.to_numpy())
+    gaps = np.diff(lines)
+    one = gaps[(gaps >= LANE_W[0]) & (gaps <= LANE_W[1])]
+    w = float(np.median(one)) if len(one) else LANE_DEFAULT_M
+    edge_l = g[g.kind.isin(["edge_left"])].x.min() if (g.kind == "edge_left").any() else np.nan
+    edge_r = g[g.kind.isin(["edge_right"])].x.max() if (g.kind == "edge_right").any() else np.nan
+    curbs = g[g.kind == "curb"].x.to_numpy()
+    if len(curbs):
+        edge_l = np.nanmax([edge_l, curbs[curbs < 0].max()]) if (curbs < 0).any() else edge_l
+        edge_r = np.nanmin([edge_r, curbs[curbs > 0].min()]) if (curbs > 0).any() else edge_r
+    if not len(lines):
+        if not (np.isfinite(edge_l) or np.isfinite(edge_r)):
+            return np.array([])
+        lines = np.array([-w / 2, w / 2])                 # no lines here: we drive in the middle of our lane
+    b = [lines[0]]
+    for x in lines[1:]:                                   # split gaps of several lanes
+        n = int(round((x - b[-1]) / w))
+        if n >= 2 and (x - b[-1]) / n >= LANE_W[0]:
+            b += [b[-1] + (x - b[-1]) * k / n for k in range(1, n)]
+        b.append(x)
+    while np.isfinite(edge_l) and b[0] - w >= edge_l - 0.5 and b[0] - w > -X_RANGE_LANES:
+        b.insert(0, b[0] - w)
+    while np.isfinite(edge_r) and b[-1] + w <= edge_r + 0.5 and b[-1] + w < X_RANGE_LANES:
+        b.append(b[-1] + w)
+    return np.array(b)
+
+
+def snap_to_lanes(frames: list, lanes: pd.DataFrame, labels: dict):
+    """Moving vehicles to the middle of the lane they are in (lane_bounds at the nearest 5-m band
+    ahead, ground_world.lane_lines). Parked cars keep their place — they stand beside the lanes."""
+    light = KINDS.index("traffic_light")
+    by_t = {}
+    for t, grp in lanes.groupby("t"):
+        own = {z: g for z, g in grp.groupby("z")}
+        with_lines = [z for z, g in own.items() if (g.kind == "line").any()]
+        bands = {}
+        for z, g in own.items():
+            if not (g.kind == "line").any() and with_lines:          # unpainted / unseen here: the lines
+                zn = min(with_lines, key=lambda q: abs(q - z))         # of the nearest band that has them
+                if abs(zn - z) <= LANE_BORROW_M:
+                    g = pd.concat([g, own[zn][own[zn].kind == "line"]])
+            bands[z] = lane_bounds(g)
+        by_t[t] = bands
+    times = np.array(sorted(by_t))
+    if not len(times):
+        return
+    inside = total = 0
+    for t, rows in frames:
+        k = int(np.argmin(np.abs(times - t)))
+        if abs(times[k] - t) > 0.15:
+            continue
+        bands = by_t[times[k]]
+        zs = np.array(sorted(bands))
+        for o in rows:
+            if o[1] == light or labels.get(o[0]) == "parked" or not 3 < o[3] < 43:
+                continue
+            total += 1
+            b = bands[zs[int(np.argmin(np.abs(zs - o[3])))]]
+            i = int(np.searchsorted(b, o[2]))
+            if 0 < i < len(b) and LANE_W[0] <= b[i] - b[i - 1] <= LANE_W[1]:
+                inside += 1
+                o[2] = round(o[2] + LANE_PULL * ((b[i] + b[i - 1]) / 2 - o[2]), 2)
+    if total:
+        print(f"   lanes: {inside / total:.0%} of moving-vehicle positions inside a lane, pulled to its middle", flush=True)
 
 
 def smooth_vehicles(frames: list, pose, labels: dict):
@@ -310,7 +391,14 @@ def run(drv: dict, objects_only: bool = False):
     folder = drv["folder"]
     dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t")
     geo = Geometry(drv, dense.iloc[0])
-    n = "kept" if objects_only else ground_video(drv, geo)
+    if objects_only:
+        n = "kept"
+    elif (folder / "speed.parquet").exists():          # the road from many frames at once (ground_world.py)
+        from src.video import ground_world, world
+        n = ground_world.render(drv, geo, world.Pose(drv), folder / "surround_ground.mp4", X_RANGE, Z_RANGE,
+                                WORLD_PX_PER_M, STYLE, DARK)
+    else:
+        n = ground_video(drv, geo)
     frames = objects(drv, geo)
     data = dict(ground=dict(video=f"processed/{drv['key']}/surround_ground.mp4", x_range=X_RANGE, z_range=Z_RANGE),
                 kinds=KINDS, camera_height=round(geo.h, 2), frames=frames)
