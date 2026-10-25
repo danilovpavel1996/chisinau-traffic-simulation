@@ -294,3 +294,30 @@ def test_tile_lights_back_in_full_frame_pixels():
     out = tile_lights(detect, frame)
     assert [b for b, _ in out] == [(10, 20, 30, 60), (int(1920 * 0.43) + 10, 20, int(1920 * 0.43) + 30, 60)]
     assert abs(iou((0, 0, 10, 10), (5, 0, 15, 10)) - 50 / 150) < 1e-6
+
+
+def test_vehicle_heading_from_box_shape_while_driving_past():
+    import numpy as np
+    import pandas as pd
+    from src.video.world import DIMS, vehicle_headings
+
+    class StraightPose:                                       # we drive north at 8 m/s
+        def at(self, t):
+            t = np.asarray(t, float)
+            return np.zeros_like(t), 8.0 * t, np.zeros_like(t)
+
+        def to_world(self, t, X, Z):
+            return np.asarray(X, float), np.asarray(Z, float) + 8.0 * np.asarray(t, float)
+
+    W_, L_, H_ = DIMS["car"]
+    car_x, car_z, car_heading = -6.0, 40.0, np.radians(40)     # parked diagonally, 40° to the right
+    rows = []
+    for t in np.arange(0, 3.0, 0.2):
+        X, Z = car_x, car_z - 8.0 * t
+        alpha = abs(car_heading - np.arctan2(X, Z))             # its axis vs our line of sight
+        width = W_ * abs(np.cos(alpha)) + L_ * abs(np.sin(alpha))
+        f, cx = 600 / Z, 960 + 600 * X / Z
+        rows.append(dict(t=t, track_id=7, cls="car", X=X, Z=Z, x1=cx - width * f / 2, x2=cx + width * f / 2,
+                         y1=500 - H_ * f, y2=500.0))
+    h = vehicle_headings(pd.DataFrame(rows), StraightPose(), 1920, 900, {7: "parked"})
+    assert np.all(np.abs(h - 40) < 6)

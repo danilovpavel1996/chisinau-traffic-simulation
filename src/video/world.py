@@ -255,6 +255,86 @@ def smooth_tracks(rows: pd.DataFrame, pose: Pose, labels: dict) -> pd.DataFrame:
     return rows
 
 
+# ── vehicle headings ────────────────────────────────────────────────────────
+DIMS = {"car": (1.8, 4.5, 1.5), "bus": (2.5, 12.0, 3.0), "truck": (2.4, 8.0, 3.0), "motorcycle": (0.8, 2.0, 1.4)}
+MOVING_MS = 1.5              # a track moving at least this fast (ground frame) shows its own direction
+EDGE_PX = 6                  # boxes touching the image edge or the bonnet: shape cut off, not used
+
+
+def view_angle(aspect: np.ndarray, cls: np.ndarray) -> np.ndarray:
+    """|angle| between a vehicle's long axis and our line of sight from its box shape: seen at α it
+    is W·|cos α| + L·|sin α| wide and H high (W, L, H per class)."""
+    a = np.radians(np.arange(0, 91))
+    out = np.empty(len(aspect))
+    for c in np.unique(cls):
+        W, L, H = DIMS.get(c, DIMS["car"])
+        f = (W * np.cos(a) + L * np.sin(a)) / H
+        top = int(np.argmax(f))                                    # widest at atan(L / W): beyond, no new info
+        m = cls == c
+        out[m] = a[np.clip(np.searchsorted(f[:top + 1], aspect[m]), 0, top)]
+    return out
+
+
+def _axis_mean(ang: np.ndarray) -> tuple[float, float]:
+    """Mean and spread (0 = all equal) of directions modulo 180°."""
+    z = np.exp(2j * ang).mean()
+    return float(np.angle(z) / 2), float(1 - abs(z))
+
+
+def vehicle_headings(obs: pd.DataFrame, pose: Pose, W: int, H_bonnet: float, labels: dict) -> np.ndarray:
+    """
+    Heading of every vehicle observation, degrees relative to ours (0 = our direction, + = right).
+
+    A vehicle's long axis from its box shape: a car side-on is ~2.5× wider than high, from behind
+    ~1×. Seen at α from its axis, its direction is our line of sight to it ± α — two candidates per
+    frame. In the ground frame the true direction stays put while we drive past and the line of
+    sight turns; the other candidate drifts: per track the steadier one is the axis. (Labels from
+    image motion gave cars waiting on a crossing street "same direction", drawn parallel to us —
+    2026_10_24_17_08 at 7:53.) Front or back: from the track's own motion when it moves, else the
+    label (oncoming → towards us; waiting on a crossing street → towards our road).
+    obs: t, track_id, cls, X, Z (car frame, smoothed), x1, y1, x2, y2 (image pixels).
+    """
+    t = obs.t.to_numpy()
+    ray = np.arctan2(obs.X.to_numpy(), obs.Z.to_numpy())
+    psi = pose.at(t)[2]
+    ok = ((obs.x1 > EDGE_PX) & (obs.x2 < W - EDGE_PX) & (obs.y2 < H_bonnet - EDGE_PX)).to_numpy()
+    aspect = ((obs.x2 - obs.x1) / (obs.y2 - obs.y1).clip(lower=1)).to_numpy()
+    alpha = view_angle(aspect, obs.cls.to_numpy())
+    xw, zw = pose.to_world(t, obs.X.to_numpy(), obs.Z.to_numpy())
+    out = np.zeros(len(obs))
+    for tid, idx in obs.groupby("track_id").indices.items():
+        label = labels.get(tid, "")
+        prior = {"oncoming": np.pi, "crossing": None}.get(label, 0.0)       # relative to our heading
+        world_prior = None if prior is None else float(np.median(psi[idx])) + prior
+        v = idx[ok[idx]]
+        axis = None
+        if len(v):
+            plus, minus = psi[v] + ray[v] + alpha[v], psi[v] + ray[v] - alpha[v]
+            (mp, sp), (mm, sm) = _axis_mean(plus), _axis_mean(minus)
+            if len(v) >= 3 and abs(sp - sm) > 0.02:
+                axis = mp if sp < sm else mm
+            else:                                               # too short to tell: the one nearer the prior
+                ref = world_prior if world_prior is not None else float(np.median(psi[v] + ray[v])) + np.pi / 2
+                axis = min((mp, mm), key=lambda a: abs(np.sin(a - ref)))
+        tt = t[idx]
+        moving = None
+        if len(idx) >= 3 and tt[-1] - tt[0] >= 0.8:
+            dx, dz = xw[idx[-1]] - xw[idx[0]], zw[idx[-1]] - zw[idx[0]]
+            if np.hypot(dx, dz) / (tt[-1] - tt[0]) >= MOVING_MS:
+                moving = float(np.arctan2(dx, dz))
+        if axis is None:
+            heading = moving if moving is not None else (world_prior if world_prior is not None else float(np.median(psi[idx])))
+        else:
+            ref = moving if moving is not None else world_prior
+            if ref is None:                                     # crossing, standing: facing our road
+                mx, mz = xw[idx].mean(), zw[idx].mean()
+                px, pz, _ = pose.at(float(np.median(tt)))
+                ref = float(np.arctan2(px - mx, pz - mz))
+            heading = axis if np.cos(axis - ref) >= 0 else axis + np.pi
+        out[idx] = np.degrees((heading - psi[idx] + np.pi) % (2 * np.pi) - np.pi)
+    return out
+
+
 # ── report on a clip ────────────────────────────────────────────────────────
 def report(drv: dict, t0: float, t1: float):
     dense = pd.read_parquet(drv["folder"] / "scene_dense.parquet").sort_values("t")

@@ -57,6 +57,7 @@ LANE_W = (2.4, 4.6)           # m between two lines (or line and curb) that make
 LANE_DEFAULT_M = 3.2         # lane width where no two lines show it
 LANE_BORROW_M = 10.0          # a band with no lines takes those of a band this near
 X_RANGE_LANES = 14.0          # lanes inferred out to this far sideways
+LANE_AXIS_DEG = 30.0          # only vehicles this close to our road's direction are put in its lanes
 LANE_PULL = 0.8               # share of the way to the lane's middle a vehicle is moved
 LANDMARK_ID = 1_000_000          # ids of traffic-light landmarks (world.py), apart from track ids
 WIDTH_M = {"car": (1.6, 2.1), "bus": (2.4, 2.6), "truck": (2.2, 2.6), "motorcycle": (0.6, 1.0)}
@@ -209,6 +210,7 @@ def objects(drv: dict, geo: Geometry) -> list:
         pose = world.Pose(drv)
         marks, light_obs = world.lights(drv, geo, pose)
     out = []
+    boxes: dict[int, tuple] = {}                              # vehicle row → its detection box (headings)
     bar = progress(det.frame.nunique(), "surround objects")
     for t, g in det.sort_values("t").groupby("t"):
         rows = []
@@ -241,6 +243,7 @@ def objects(drv: dict, geo: Geometry) -> list:
             lo, hi = WIDTH_M[b.cls]
             rows.append([int(b.track_id), kind, round(X, 2), round(Z, 2), round(float(np.clip(w, lo, hi)), 2), 0,
                          int(labels.get(b.track_id) == "crossing")])
+            boxes[id(rows[-1])] = (b.cls, b.x1, b.y1, b.x2, b.y2)
         if marks is not None:
             vis = marks[(marks.t_first - world.SHOW_BEFORE_S <= t) & (marks.t_last + world.SHOW_AFTER_S >= t)]
             if len(vis):
@@ -255,8 +258,17 @@ def objects(drv: dict, geo: Geometry) -> list:
     bar.close()
     if marks is not None:
         smooth_vehicles(out, pose, labels)
-        if (folder / "lanes_world.parquet").exists():
+        refs = [(t, o) for t, rows in out for o in rows if id(o) in boxes]
+        obs = pd.DataFrame([dict(t=t, track_id=o[0], X=o[2], Z=o[3], cls=boxes[id(o)][0], x1=boxes[id(o)][1],
+                                 y1=boxes[id(o)][2], x2=boxes[id(o)][3], y2=boxes[id(o)][4]) for t, o in refs])
+        if len(obs):
+            hd = world.vehicle_headings(obs, pose, meta["width"], meta["height"] * cam["bonnet"], labels)
+            for (_, o), h in zip(refs, hd):
+                o.append(round(float(h), 1))
+        print(f"   {(obs.track_id.nunique() if len(obs) else 0)} vehicle tracks: heading from box shape + track", flush=True)
+        if (folder / "lanes_world.parquet").exists():        # after the headings: only vehicles along our road
             snap_to_lanes(out, pd.read_parquet(folder / "lanes_world.parquet"), labels)
+        return out
         print(f"   {len(marks)} traffic lights as landmarks ({(light_obs.mark >= 0).mean():.0%} of light detections)", flush=True)
     add_headings(out, EgoMotion(drv), labels)
     return out
@@ -322,6 +334,8 @@ def snap_to_lanes(frames: list, lanes: pd.DataFrame, labels: dict):
         zs = np.array(sorted(bands))
         for o in rows:
             if o[1] == light or labels.get(o[0]) == "parked" or not 3 < o[3] < 43:
+                continue
+            if len(o) > 7 and abs((o[7] + 90) % 180 - 90) > LANE_AXIS_DEG:      # crossing / turning: not our lanes
                 continue
             total += 1
             b = bands[zs[int(np.argmin(np.abs(zs - o[3])))]]
