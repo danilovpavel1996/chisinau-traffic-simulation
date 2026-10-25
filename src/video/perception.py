@@ -460,61 +460,103 @@ SHIP = ["src/video/__init__.py", "src/video/perception.py", "src/video/compute.p
 OUTPUTS = ["detections.parquet", "ego.parquet", "meta.json"]
 
 
-def upload_copy(drv: dict) -> Path:
-    """
-    A smaller copy of the video for the upload: same 1080p frames and frame numbers (so every
-    time and pixel measured stays the same), stronger H.264 compression (CRF 30: ~0.7 MB per
-    second of video; the detector sees 640-px images anyway). A long upload gives a free Colab
-    runtime time to be reclaimed half-way (2026_10_23_19_26 at 1.3 GB; 2026_10_24_17_08 at CRF 23,
-    1.8 GB).
-    Encoded with 4 threads at low priority: slower, but the laptop stays quiet.
-    """
-    out = drv["folder"] / "colab" / f"{drv['key']}_upload.mp4"
+CHUNK_S = 240              # seconds of video per Colab job (a multiple of every stride, in frames)
+CHUNK_CRF = 26             # upload quality: CRF 30 hid ~40 % of small traffic lights (detect_test.py)
+CHUNK_ID = 1_000_000       # track ids of chunk i start at i × this (the tracker restarts per chunk)
+
+
+def chunk_video(drv: dict, i: int, fps: float, n_frames: int) -> tuple[Path, int, int]:
+    """Frames [f0, f1) of the video as a lightly compressed clip (exact frames: accurate seek)."""
+    f0 = i * int(round(CHUNK_S * fps))
+    f1 = min(n_frames, f0 + int(round(CHUNK_S * fps)))
+    out = drv["folder"] / "colab" / "chunks" / f"{drv['key']}_{i:02d}.mp4"
     if not out.exists():
-        out.parent.mkdir(exist_ok=True)
-        print(f"compressing the video for upload → {out.name}…", flush=True)
-        subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-stats", "-y", "-i", str(drv["video"]), "-map", "0:v:0",
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-threads", "4", "-pix_fmt", "yuvj420p",
-                        "-vsync", "passthrough", "-an", str(out)], check=True)
-    return out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-y", "-ss", f"{f0 / fps:.4f}", "-i", str(drv["video"]),
+                        "-frames:v", str(f1 - f0), "-map", "0:v:0", "-c:v", "libx264", "-preset", "veryfast",
+                        "-crf", str(CHUNK_CRF), "-threads", "4", "-pix_fmt", "yuvj420p", "-an", str(out)], check=True)
+    return out, f0, f1
 
 
 def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bool = False):
-    """The same perception code on a Colab T4: ship code + video, run detached, fetch the outputs."""
+    """
+    The same perception code on a Colab T4, in chunks of CHUNK_S seconds: each chunk is uploaded,
+    detected and downloaded as its own job, so a free GPU taken back half-way costs one chunk, and
+    a rerun resumes at the first missing one. The chunks are then joined: frame numbers and times
+    shifted back, track ids made unique per chunk (tracks are cut at chunk borders).
+    """
     import io
     import zipfile
     from src.video.colab import Session
     folder, key = drv["folder"], drv["key"]
-    for name in ("detections.parquet", "ego.parquet", "meta.json"):         # keep the laptop (YOLO) run to compare
-        old, keep = folder / name, folder / name.replace(".", "_yolo.", 1)
-        if old.exists() and not keep.exists() and "yolo11" in (folder / "meta.json").read_text():
-            keep.write_bytes(old.read_bytes())
+    cap = cv2.VideoCapture(str(drv["video"]))
+    fps, n_frames = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    n_chunks = -(-n_frames // int(round(CHUNK_S * fps)))
+    parts = folder / "colab" / "chunks"
+    parts.mkdir(parents=True, exist_ok=True)
+    todo = [i for i in range(n_chunks) if not (parts / f"detections_{i:02d}.parquet").exists()]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         for rel in SHIP:
             z.write(ROOT / rel, rel)
     code = folder / "colab" / "perception_code.zip"
-    code.parent.mkdir(exist_ok=True)
     code.write_bytes(buf.getvalue())
     video_rel = drv["video"].relative_to(ROOT)
-    small = upload_copy(drv)
     t0 = time.time()
-    with Session(f"perception-{key}", reuse=reuse) as s:
-        s.upload(code, "/content/repo/code.zip")
-        s.upload(small, f"/content/repo/{video_rel}")
-        s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
-        s.start(f"""import subprocess, sys, zipfile
+    if todo:
+        with Session(f"perception-{key}", reuse=reuse) as s:
+            s.upload(code, "/content/repo/code.zip")
+            s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
+            for i in todo:
+                clip, f0, f1 = chunk_video(drv, i, fps, n_frames)
+                print(f"chunk {i + 1}/{n_chunks}: frames {f0}–{f1} ({clip.stat().st_size / 1e6:.0f} MB)", flush=True)
+                s.upload(clip, f"/content/repo/{video_rel}")
+                s.start(f"""import subprocess, sys, zipfile
 zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo")
 sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
                           "--device", "cuda", "--tiles"] + ([] if {reid} else ["--no-reid"]), cwd="/content/repo"))
 """)
-        code_ = s.wait()
-        if code_ != 0:
-            print(s.log())
-            raise RuntimeError(f"perception on Colab failed (exit {code_})")
-        for name in OUTPUTS:
-            s.download(f"/content/repo/data/video/processed/{key}/{name}", folder / name)
-    print(f"Colab perception ({detector}) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+                code_ = s.wait()
+                if code_ != 0:
+                    print(s.log())
+                    raise RuntimeError(f"perception chunk {i} on Colab failed (exit {code_})")
+                for name in OUTPUTS:
+                    stem, ext = name.split(".")
+                    s.download(f"/content/repo/data/video/processed/{key}/{name}", parts / f"{stem}_{i:02d}.{ext}")
+                print(f"   chunk {i + 1}/{n_chunks} done ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    join_chunks(drv, n_chunks, fps, detector)
+    print(f"Colab perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+
+
+def join_chunks(drv: dict, n_chunks: int, fps: float, detector: str):
+    folder = drv["folder"]
+    parts = folder / "colab" / "chunks"
+    dets, egos, metas = [], [], []
+    for i in range(n_chunks):
+        f0 = i * int(round(CHUNK_S * fps))
+        d = pd.read_parquet(parts / f"detections_{i:02d}.parquet")
+        e = pd.read_parquet(parts / f"ego_{i:02d}.parquet")
+        for df in (d, e):
+            df["frame"] += f0
+            df["t"] = df.frame / fps
+        d.loc[d.track_id >= 0, "track_id"] += i * CHUNK_ID
+        dets.append(d)
+        egos.append(e)
+        metas.append(json.loads((parts / f"meta_{i:02d}.json").read_text()))
+    for name in ("detections.parquet", "ego.parquet", "meta.json"):           # the previous run, to compare
+        old, keep = folder / name, folder / name.replace(".", "_v1.", 1)
+        if old.exists() and not keep.exists():
+            keep.write_bytes(old.read_bytes())
+    (folder / "detections_raw.parquet").unlink(missing_ok=True)              # bonnet.py cleans the new ones
+    det = pd.concat(dets, ignore_index=True)
+    det.to_parquet(folder / "detections.parquet", index=False)
+    pd.concat(egos, ignore_index=True).to_parquet(folder / "ego.parquet", index=False)
+    meta = dict(metas[0], video=str(drv["video"].relative_to(ROOT)), start_s=0.0,
+                end_s=float(sum(m["end_s"] for m in metas)), n_sampled_frames=sum(m["n_sampled_frames"] for m in metas),
+                n_detections=len(det), runtime_s=round(sum(m["runtime_s"] for m in metas), 1),
+                chunks=n_chunks, chunk_s=CHUNK_S, chunk_crf=CHUNK_CRF, tiles=True)
+    (folder / "meta.json").write_text(json.dumps(meta, indent=2))
 
 
 def main():
