@@ -120,6 +120,32 @@ def make_tracker(reid: bool, device: str = "cpu"):
     return BOTSORT(args, frame_rate=30) if "frame_rate" in inspect.signature(BOTSORT.__init__).parameters else BOTSORT(args)
 
 
+# ── Distant traffic lights ────────────────────────────────────────────────────
+LIGHT_CONF = 0.3             # untracked light detections kept from this confidence
+TILE_TOP, TILE_CONF = 0.55, 0.4
+
+
+def tile_lights(detect, frame: np.ndarray) -> list:
+    """Traffic lights in the upper image, cut into two overlapping tiles: a distant light is ~1.6×
+    larger in the detector's input (it shrinks every image to 640 px). Clips of 2026_10_24_17_08:
+    real lights the full image missed; below TILE_CONF mostly false (detect_test.py)."""
+    H, W = frame.shape[:2]
+    top = frame[:int(H * TILE_TOP)]
+    out = []
+    for x0, x1 in ((0, int(W * 0.57)), (int(W * 0.43), W)):
+        xyxy, cf, lab = detect(np.ascontiguousarray(top[:, x0:x1]))
+        out += [((int(b[0] + x0), int(b[1]), int(b[2] + x0), int(b[3])), float(c))
+                for b, c, n in zip(xyxy, cf, lab) if n == "traffic_light" and c >= TILE_CONF]
+    return out
+
+
+def iou(a, b) -> float:
+    w = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    h = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    i = w * h
+    return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i + 1e-9)
+
+
 # ── Traffic light colour ──────────────────────────────────────────────────────
 def light_state(frame: np.ndarray, box: tuple[int, int, int, int]) -> str:
     """Classify a traffic-light crop by its brightest saturated hue."""
@@ -320,7 +346,8 @@ class SceneFlow:
 
 # ── Main pass ─────────────────────────────────────────────────────────────────
 def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float | None = None,
-        imgsz: int = 640, conf: float = 0.1, detector: str = "yolo", reid: bool = True, device: str = "cpu") -> Path:
+        imgsz: int = 640, conf: float = 0.1, detector: str = "yolo", reid: bool = True, device: str = "cpu",
+        tiles: bool = False) -> Path:
     video, stride, hood = drv["video"], drv["stride"], drv["camera"]["hood"]
     limit_cpu()
     cap = cv2.VideoCapture(str(video))
@@ -372,6 +399,18 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
 
         xyxy, cf, labels = detect(frame)
         tracks = tracker.update(Dets(xyxy, cf, np.array([names.index(n) for n in labels], float)), frame)
+        tracked = set(tracks[:, 7].astype(int)) if len(tracks) else set()
+        # traffic lights: every confident detection, tracked or not — world.py places lights by
+        # geometry, and a small light rarely becomes a confirmed track (2026_10_24_17_08 at 15:19:
+        # 1–2 detections kept at 5 fps of a light seen the whole time)
+        lights = [(tuple(xyxy[i].astype(int)), float(cf[i])) for i, n in enumerate(labels)
+                  if n == "traffic_light" and i not in tracked and cf[i] >= LIGHT_CONF]
+        if tiles:
+            lights += [b for b in tile_lights(detect, frame) if all(iou(b[0], tuple(xyxy[i])) < 0.3
+                                                                for i, n in enumerate(labels) if n == "traffic_light")]
+        for (x1, y1, x2, y2), p in lights:
+            rows.append(dict(frame=f, t=t, track_id=-1, cls="traffic_light", conf=p, x1=x1, y1=y1, x2=x2, y2=y2,
+                             light=light_state(frame, (x1, y1, x2, y2))))
         if len(tracks):
             idx = tracks[:, 7].astype(int)                  # tracked detections: their own box, score, class
             for (x1, y1, x2, y2), p, name, tid in zip(xyxy[idx].astype(int), cf[idx], [labels[i] for i in idx],
@@ -467,7 +506,7 @@ def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bo
         s.start(f"""import subprocess, sys, zipfile
 zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo")
 sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
-                          "--device", "cuda"] + ([] if {reid} else ["--no-reid"]), cwd="/content/repo"))
+                          "--device", "cuda", "--tiles"] + ([] if {reid} else ["--no-reid"]), cwd="/content/repo"))
 """)
         code_ = s.wait()
         if code_ != 0:
@@ -491,13 +530,14 @@ def main():
     ap.add_argument("--device", default="cpu", help="cpu / cuda")
     ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
     ap.add_argument("--reuse", action="store_true", help="with --colab: attach to the drive's runtime if still alive")
+    ap.add_argument("--tiles", action="store_true", help="also look for distant traffic lights in two tiles of the upper image")
     a = ap.parse_args()
     drv = drives.load(a.drive)
     if a.colab:
         run_colab(drv, a.detector or "rtdetr2", not a.no_reid, a.reuse)
     else:
         run(drv, a.ego_only, a.start, a.duration, detector=a.detector or "yolo",
-            reid=not a.no_reid and a.device != "cpu", device=a.device)
+            reid=not a.no_reid and a.device != "cpu", device=a.device, tiles=a.tiles)
 
 
 if __name__ == "__main__":

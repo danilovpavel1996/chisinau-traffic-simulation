@@ -155,25 +155,31 @@ def run_colab(drv: dict, spans: list[tuple[float, float]]):
     remote = {k: (f"/content/clips/{p.name}", f0) for k, (p, f0) in clips.items()}
     t0 = time.time()
     out_dir = drv["folder"] / "detect_test"
-    todo = [c for c in CONFIGS if not (out_dir / f"{c}.parquet").exists()]       # a rerun resumes
-    if not todo:
-        print("all runs already downloaded")
-        return
-    with Session(f"dettest-{drv['key']}") as s:
-        s.upload(code, "/content/repo/code.zip")
-        for p, _ in clips.values():
-            s.upload(p, f"/content/clips/{p.name}")
-        s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
-        for config in todo:                 # one job per run, downloaded at once: a free GPU taken back
-            script = REMOTE.format(clips=json.dumps(remote), rates=json.dumps(RATES), tiles_rate=TILES_RATE,
-                                   buffer_s=BUFFER_S, tile_top=TILE_TOP, configs=json.dumps([config]))
-            s.start('import zipfile, os; zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo"); '
-                    'os.makedirs("/content/out", exist_ok=True)\n' + script)
-            if s.wait() != 0:
-                print(s.log())
-                raise RuntimeError(f"detection test {config} on Colab failed")
-            s.download(f"/content/out/{config}.parquet", out_dir / f"{config}.parquet")
-            print(f"→ {out_dir / (config + '.parquet')} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    # one job per run and clip (~5–15 min each), downloaded at once: a free GPU taken back
+    # half-way through costs one piece, and a rerun resumes at the first missing one
+    units = [(c, k) for c in CONFIGS if not (out_dir / f"{c}.parquet").exists() for k in clips
+             if not (out_dir / f"{c}__{k}.parquet").exists()]
+    if units:
+        with Session(f"dettest-{drv['key']}") as s:
+            s.upload(code, "/content/repo/code.zip")
+            for p, _ in clips.values():
+                s.upload(p, f"/content/clips/{p.name}")
+            s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
+            for config, clip in units:
+                script = REMOTE.format(clips=json.dumps({clip: remote[clip]}), rates=json.dumps(RATES),
+                                       tiles_rate=TILES_RATE, buffer_s=BUFFER_S, tile_top=TILE_TOP,
+                                       configs=json.dumps([config]))
+                s.start('import zipfile, os; zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo"); '
+                        'os.makedirs("/content/out", exist_ok=True)\n' + script)
+                if s.wait() != 0:
+                    print(s.log())
+                    raise RuntimeError(f"detection test {config} / {clip} on Colab failed")
+                s.download(f"/content/out/{config}.parquet", out_dir / f"{config}__{clip}.parquet")
+                print(f"→ {config} / {clip} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    for config in CONFIGS:                                   # whole runs from their clips
+        parts = [out_dir / f"{config}__{k}.parquet" for k in clips]
+        if not (out_dir / f"{config}.parquet").exists() and all(p.exists() for p in parts):
+            pd.concat([pd.read_parquet(p) for p in parts]).to_parquet(out_dir / f"{config}.parquet", index=False)
     print(f"→ {out_dir}: Colab {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
@@ -199,12 +205,12 @@ def score(drv: dict):
         # a new ID on a large box well inside the image, not at a clip's start: a car already in view
         h = first.y2 - first.y1
         inner = (first.x1 > 0.08 * W) & (first.x2 < 0.92 * W)
-        switch = first[(h > 0.09 * H) & inner & (first.t > first.clip.map(clip_start) + 1.0)]
+        switch = first[(h > 0.09 * H) & inner & (first.t > first["clip"].map(clip_start) + 1.0)]
         L = d[d.cls == "traffic_light"]
         grid = []
         for c, g in d.groupby("clip"):
             ts = np.round(np.arange(g.t.min(), g.t.max(), 0.2), 1)
-            seen = set(np.round(np.floor(L[L.clip == c].t / 0.2) * 0.2, 1))
+            seen = set(np.round(np.floor(L[L["clip"] == c].t / 0.2) * 0.2, 1))
             grid += [t in seen for t in ts]
         rows.append(dict(config=config, frames=d.frame.nunique(), vehicle_ids_per_min=round(life.size / minutes),
                          track_life_median_s=round(float(life.median()), 1), id_switches_per_min=round(len(switch) / minutes, 1),

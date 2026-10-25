@@ -282,3 +282,15 @@ def test_bonnet_boxes_dropped_real_cars_kept(tmp_path):
     kept = pd.read_parquet(tmp_path / "detections.parquet")
     assert len(kept) == 2 and set(kept.cls) == {"car", "traffic_light"} and kept[kept.cls == "car"].y1.iat[0] == 0.5 * H
     assert len(pd.read_parquet(tmp_path / "detections_raw.parquet")) == 4
+
+
+def test_tile_lights_back_in_full_frame_pixels():
+    import numpy as np
+    from src.video.perception import TILE_CONF, iou, tile_lights
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    def detect(img):                                  # one light near each tile's left edge, one weak box
+        return (np.array([[10, 20, 30, 60], [100, 100, 120, 140]], float), np.array([0.8, TILE_CONF - 0.1]),
+                ["traffic_light", "traffic_light"])
+    out = tile_lights(detect, frame)
+    assert [b for b, _ in out] == [(10, 20, 30, 60), (int(1920 * 0.43) + 10, 20, int(1920 * 0.43) + 30, 60)]
+    assert iou((0, 0, 10, 10), (5, 0, 15, 10)) == 50 / 150
