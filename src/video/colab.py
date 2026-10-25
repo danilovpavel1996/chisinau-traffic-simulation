@@ -136,6 +136,8 @@ print("started")""")
 log = open({LOG!r}, errors="replace").read() if os.path.exists({LOG!r}) else ""
 print(log[-3000:].replace("\\r", "\\n"))
 print("@@EXIT", open({DONE!r}).read().strip() if os.path.exists({DONE!r}) else "running")""", timeout=60)
+            if "not found" in out and "Session" in out:   # the free runtime was taken back: no point waiting
+                raise RuntimeError("the Colab runtime is gone (free GPUs can be reclaimed) — run again")
             if "@@EXIT" not in out:                      # the check itself failed (connection), not the job
                 failed += 1
                 if failed >= MAX_FAILED_POLLS:

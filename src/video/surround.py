@@ -182,7 +182,7 @@ def objects(drv: dict, geo: Geometry) -> list:
     folder, cam = drv["folder"], drv["camera"]
     meta = json.loads((folder / "meta.json").read_text())
     k = WIDTH / meta["width"]
-    hood_y = meta["height"] * (1 - cam["hood"]) - 4
+    hood_y = meta["height"] * cam["bonnet"] - 4
     det = pd.read_parquet(folder / "detections.parquet")
     labels = pd.read_parquet(folder / "tracks.parquet").set_index("track_id").label.to_dict()
     td, maps = depth_mod.load(drv) if (folder / "depth.parquet").exists() else (np.array([]), [])

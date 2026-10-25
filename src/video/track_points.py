@@ -101,7 +101,7 @@ def inputs(drv: dict) -> tuple[dict, int, int]:
     det = pd.read_parquet(folder / "detections.parquet")
     det = det[det.cls.isin(VEHICLES)]
     boxes = {int(f): (g[["x1", "y1", "x2", "y2"]].to_numpy() * k).round().astype(int).tolist() for f, g in det.groupby("frame")}
-    bonnet = int(meta["height"] * (1 - drv["camera"]["hood"]) * k) - 4
+    bonnet = int(meta["height"] * drv["camera"]["bonnet"] * k) - 4
     return boxes, input_height(drv), bonnet
 
 

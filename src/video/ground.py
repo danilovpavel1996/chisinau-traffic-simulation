@@ -75,7 +75,7 @@ def parked_cars(drv: dict, y_guess: float) -> list[tuple[np.ndarray, np.ndarray]
     ids = tracks[(tracks.label == "parked") & (tracks.cls == "car")].track_id
     det = pd.read_parquet(folder / "detections.parquet")
     det = det[det.track_id.isin(ids) & (det.x1 > EDGE * W) & (det.x2 < (1 - EDGE) * W)
-              & (det.y2 < H * (1 - cam["hood"]) - 4)]
+              & (det.y2 < H * cam["bonnet"] - 4)]
     det = det.assign(kmh=np.interp(det.t, g.video_s, g.speed_kmh),
                      yaw=np.interp(det.t, e.t, e.yaw_smooth.abs()),
                      s=np.interp(det.t, g.video_s, driven))

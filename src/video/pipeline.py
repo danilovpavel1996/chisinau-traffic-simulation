@@ -36,7 +36,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "speed", "bev", "surround", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "bonnet", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "speed", "bev", "surround", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -47,6 +47,9 @@ def run_step(step: str, drv: dict):
     elif step == "perception":                # > 5 min on the laptop → free Colab GPU
         from src.video import perception
         perception.run_colab(drv)
+    elif step == "bonnet":                    # where our own car is in the picture; its boxes dropped
+        from src.video import bonnet
+        bonnet.run(drv)
     elif step == "traffic":
         from src.video import traffic
         traffic.run(drv)

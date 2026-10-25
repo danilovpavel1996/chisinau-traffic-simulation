@@ -39,7 +39,9 @@ import pandas as pd
 from src.video import drives
 from src.video.drives import ROOT
 
-RATES = {"5fps": 6, "10fps": 3, "15fps": 2, "30fps": 1}       # config → frame stride (30 fps video)
+RATES = {"5fps": 6, "10fps": 3, "15fps": 2, "30fps": 1}       # frame stride per rate (30 fps video)
+# runs, cheapest and most useful first; "tiles" = 10 fps + tiled lights (its full-image rows are the 10-fps run)
+CONFIGS = ["5fps", "tiles", "15fps", "30fps"]
 TILES_RATE = "10fps"
 BUFFER_S = 10.0
 TILE_TOP = 0.55                                                # tiles cover the upper 55 % of the image
@@ -84,7 +86,7 @@ def iou(a, b):
     i = w * h
     return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i + 1e-9)
 
-todo = [(c, s) for c, s in RATES.items()] + [("tiles", RATES[TILES_RATE])]
+todo = [(c, RATES.get(c, RATES[TILES_RATE])) for c in {configs}]
 t_all = time.time()
 for config, stride in todo:
     rows = []
@@ -151,22 +153,28 @@ def run_colab(drv: dict, spans: list[tuple[float, float]]):
     code = drv["folder"] / "detect_test" / "code.zip"
     code.write_bytes(buf.getvalue())
     remote = {k: (f"/content/clips/{p.name}", f0) for k, (p, f0) in clips.items()}
-    script = REMOTE.format(clips=json.dumps(remote), rates=json.dumps(RATES), tiles_rate=TILES_RATE,
-                           buffer_s=BUFFER_S, tile_top=TILE_TOP)
     t0 = time.time()
+    out_dir = drv["folder"] / "detect_test"
+    todo = [c for c in CONFIGS if not (out_dir / f"{c}.parquet").exists()]       # a rerun resumes
+    if not todo:
+        print("all runs already downloaded")
+        return
     with Session(f"dettest-{drv['key']}") as s:
         s.upload(code, "/content/repo/code.zip")
         for p, _ in clips.values():
             s.upload(p, f"/content/clips/{p.name}")
         s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
-        s.start('import zipfile, os; zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo"); '
-                'os.makedirs("/content/out", exist_ok=True)\n' + script)
-        if s.wait() != 0:
-            print(s.log())
-            raise RuntimeError("detection test on Colab failed")
-        for config in list(RATES) + ["tiles"]:
-            s.download(f"/content/out/{config}.parquet", drv["folder"] / "detect_test" / f"{config}.parquet")
-    print(f"→ {drv['folder'] / 'detect_test'}: Colab {(time.time() - t0) / 60:.1f} min", flush=True)
+        for config in todo:                 # one job per run, downloaded at once: a free GPU taken back
+            script = REMOTE.format(clips=json.dumps(remote), rates=json.dumps(RATES), tiles_rate=TILES_RATE,
+                                   buffer_s=BUFFER_S, tile_top=TILE_TOP, configs=json.dumps([config]))
+            s.start('import zipfile, os; zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo"); '
+                    'os.makedirs("/content/out", exist_ok=True)\n' + script)
+            if s.wait() != 0:
+                print(s.log())
+                raise RuntimeError(f"detection test {config} on Colab failed")
+            s.download(f"/content/out/{config}.parquet", out_dir / f"{config}.parquet")
+            print(f"→ {out_dir / (config + '.parquet')} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    print(f"→ {out_dir}: Colab {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
 def score(drv: dict):
@@ -174,11 +182,15 @@ def score(drv: dict):
     meta = json.loads((drv["folder"] / "meta.json").read_text())
     W, H = meta["width"], meta["height"]
     rows = []
-    for config in list(RATES) + ["tiles"]:
+    runs = []
+    for config in CONFIGS:
         f = folder / f"{config}.parquet"
-        if not f.exists():
-            continue
-        d = pd.read_parquet(f)
+        if f.exists():
+            d = pd.read_parquet(f)
+            if config == "tiles":
+                runs.append(("10fps", d[d.source == "full"]))
+            runs.append((config, d))
+    for config, d in runs:
         v = d[d.cls.isin(["car", "bus", "truck", "motorcycle"])]
         minutes = sum((g.t.max() - g.t.min()) for _, g in d.groupby("clip")) / 60
         life = v.groupby(["clip", "track_id"]).t.agg(lambda s: s.max() - s.min())
@@ -205,6 +217,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("drive", help="drive key in configs/drives.yaml")
     ap.add_argument("spans", nargs="*", help="clips as start:end seconds")
+    # (the clip videos are cut once and kept in detect_test/)
     ap.add_argument("--score", action="store_true", help="score the downloaded results")
     a = ap.parse_args()
     drv = drives.load(a.drive)

@@ -265,3 +265,20 @@ def test_traffic_light_landmark_from_lines_of_sight_and_noisy_depth():
                             depth=true_d * rng.normal(1, 0.25, len(oz))))   # one frame's depth: ±25 %
     x, z, rms = solve(obs)
     assert np.hypot(x - light[0], z - light[1]) < 1.5 and rms < 0.5
+
+
+def test_bonnet_boxes_dropped_real_cars_kept(tmp_path):
+    import json
+    import pandas as pd
+    from src.video.bonnet import clean
+    W, H = 1920, 1080
+    (tmp_path / "meta.json").write_text(json.dumps(dict(width=W, height=H)))
+    box = lambda cls, x1, y1, x2, y2: dict(frame=1, t=0.2, track_id=1, cls=cls, x1=x1 * W, y1=y1 * H, x2=x2 * W, y2=y2 * H)
+    pd.DataFrame([box("car", 0.0, 0.76, 1.0, 1.0),          # the bonnet itself
+                  box("car", 0.0, 0.55, 1.0, 0.98),         # bonnet plus road, boxed as one "car"
+                  box("car", 0.40, 0.50, 0.62, 0.80),       # a car right ahead, its bottom hidden by the bonnet
+                  box("traffic_light", 0.5, 0.2, 0.52, 0.26)]).to_parquet(tmp_path / "detections.parquet")
+    clean(dict(folder=tmp_path), [0.78] * 49)
+    kept = pd.read_parquet(tmp_path / "detections.parquet")
+    assert len(kept) == 2 and set(kept.cls) == {"car", "traffic_light"} and kept[kept.cls == "car"].y1.iat[0] == 0.5 * H
+    assert len(pd.read_parquet(tmp_path / "detections_raw.parquet")) == 4

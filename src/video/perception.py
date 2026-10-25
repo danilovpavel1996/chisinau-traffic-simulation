@@ -376,7 +376,7 @@ def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float |
             idx = tracks[:, 7].astype(int)                  # tracked detections: their own box, score, class
             for (x1, y1, x2, y2), p, name, tid in zip(xyxy[idx].astype(int), cf[idx], [labels[i] for i in idx],
                                                       tracks[:, 4].astype(int)):
-                if name in VEHICLE_CLASSES and (y1 + y2) / 2 > H * (1 - hood):
+                if name in VEHICLE_CLASSES and (y1 + y2) / 2 > H * drv["camera"].get("bonnet", 1 - hood):
                     continue  # bonnet / dashboard detected as a car
                 rows.append(dict(frame=f, t=t, track_id=int(tid), cls=name, conf=float(p),
                                  x1=x1, y1=y1, x2=x2, y2=y2,

@@ -33,11 +33,16 @@ def load(key: str) -> dict:
     # the configured field of view is only a starting guess; calibrate.py replaces it
     # with the value measured against the map, when that measurement is consistent
     d["camera"] = dict(d["camera"], hfov_nominal=d["camera"]["hfov_deg"])
+    # where our bonnet starts (fraction of the height from the top): measured by bonnet.py, else the
+    # configured `hood` (which also sets the image crops the models were run on — kept as it is)
+    d["camera"]["bonnet"] = 1 - d["camera"]["hood"]
     cal = d["folder"] / "calibration.json"
     if cal.exists():
         c = json.loads(cal.read_text())
         if c.get("status") == "calibrated":
             d["camera"]["hfov_deg"] = c["hfov_deg"]
+        if "bonnet_frac" in c:
+            d["camera"]["bonnet"] = min(c["bonnet_frac"], d["camera"]["bonnet"])
     return d
 
 

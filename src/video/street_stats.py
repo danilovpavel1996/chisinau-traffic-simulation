@@ -61,7 +61,7 @@ def run(drv: dict, quiet: bool = False) -> dict:
     W, H = meta["width"], meta["height"]
     det = pd.read_parquet(folder / "detections.parquet")
     light = dominant_light(det).merge(det[["frame", "t"]].drop_duplicates(), on="frame")
-    veh = det[det.cls.isin(VEHICLES) & ((det.y1 + det.y2) / 2 < H * (1 - drv["camera"]["hood"]))].copy()
+    veh = det[det.cls.isin(VEHICLES) & ((det.y1 + det.y2) / 2 < H * drv["camera"]["bonnet"])].copy()
     veh["cx"] = (veh.x1 + veh.x2) / 2 / W
     frame_t = det[["frame", "t"]].drop_duplicates().sort_values("t")
 

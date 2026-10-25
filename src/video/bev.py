@@ -136,7 +136,7 @@ def camera_height(drv: dict, y_h: float, k: float) -> float:
     """Camera height from cars near the image centre: h = CAR_W · (bottom − horizon) / width."""
     meta = json.loads((drv["folder"] / "meta.json").read_text())
     d = pd.read_parquet(drv["folder"] / "detections.parquet")
-    d = d[(d.cls == "car") & (d.conf > 0.5) & (d.y2 < meta["height"] * (1 - drv["camera"]["hood"]))]
+    d = d[(d.cls == "car") & (d.conf > 0.5) & (d.y2 < meta["height"] * drv["camera"]["bonnet"])]
     x, dy, w = (d.x1 + d.x2) / 2 * k, d.y2 * k - y_h, (d.x2 - d.x1) * k
     ok = (abs(x - WIDTH / 2) < WIDTH / 8) & (dy > 12) & (w > 25)
     return float(np.median(CAR_W * dy[ok] / w[ok])) if ok.sum() > 50 else CAM_H
@@ -171,7 +171,7 @@ class Geometry:
         self.k1 = c.get("lens_k1") or 0.0
         self.fl = c.get("lens_focal_px") or self.fz
         self.cy = (meta["height"] * (1 - cam["hood"] + 0.03)) * self.k / 2      # centre of the cropped image
-        self.bonnet = meta["height"] * (1 - cam["hood"]) * self.k
+        self.bonnet = meta["height"] * cam["bonnet"] * self.k
         self.top, self.step = int(dense_row.top), int(dense_row.step)
         self.shape = json.loads(dense_row.mask_shape)
         # one class-map index per BEV cell (same for every frame)
@@ -375,7 +375,7 @@ def run(drv: dict):
     P = poses(drv, times)
     clock = drives.clock(drv, times).strftime("%H:%M:%S")
     det = pd.read_parquet(folder / "detections.parquet")
-    det = det[det.cls.isin(VEHICLES) & (det.y2 < meta["height"] * (1 - drv["camera"]["hood"]))]
+    det = det[det.cls.isin(VEHICLES) & (det.y2 < meta["height"] * drv["camera"]["bonnet"])]
     det_t = np.sort(det.t.unique())
     by_t = {t: g for t, g in det.groupby("t")}
     dense_t = dense.t.to_numpy()
