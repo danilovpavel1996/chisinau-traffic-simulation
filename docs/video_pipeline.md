@@ -508,3 +508,32 @@ error 4.8 / 3.6 / 8.8 / 3.5 km/h (day / night / out of town / city).
   (only lines actually read: 24 %); the rest mostly at junctions and in turns.
 - Waiting for a Colab GPU: `detect_test.py` (5/10/15/30 fps tracking, tiled detection of
   distant lights) on three clips of 2026_10_24_17_08.
+
+### Detection / tracking test on clips (2026-10-25, `detect_test.py`)
+
+2026_10_24_17_08, clips 470–560 s (left turn + parked cars), 700–740 s (junction with lights),
+895–925 s (the light at 15:19); RT-DETRv2 + BoT-SORT/ReID as in perception.py, tracker memory
+kept at ~10 s at every rate.
+
+| rate | vehicle IDs / min | track life (median) | close cars (> 80 px): new ID while already close and inside the image / min | moments with a (tracked) light |
+|---|---|---|---|---|
+| 5 fps | 155 | 3.6 s | 12 | 24 % |
+| 10 fps | 241 | 2.2 s | 24 | 49 % |
+| 15 fps | 294 | 1.8 s | 33 | 56 % |
+| 30 fps | 377 | 1.4 s | 40 | 66 % |
+
+- More frames did **not** keep identities better with this tracker — the opposite. Not
+  fragments of one car (joining pieces ≤ 0.6 s apart changes little: 1.03–1.07 pieces per
+  car): more short new tracks, also on close cars. BoT-SORT is tuned for 5 fps (birth threshold,
+  match threshold, camera-motion compensation); a higher rate needs a re-tuned or different
+  association — planned in the ground frame, with lanes (README plan). Detection stays at 5 fps.
+- Traffic lights: the tracker discarded most light detections (only confirmed tracks were
+  kept): at 15:19 one detection at 5 fps vs 29 at 10 fps. Fixed in perception.py: every light
+  ≥ 0.3 kept, tracked or not (world.py groups them by geometry).
+- Tiles (upper image in two overlapping tiles): real distant / side-on lights the full image
+  misses, but below 0.4 confidence mostly false (median tile confidence 0.14). Kept ≥ 0.4.
+- Compression: the lightly compressed clips gave +40 % light detections at 15:19 and +36 % at the
+  junction vs the CRF-30 upload copy (vehicles ±5 %). For the next full runs: better quality,
+  uploaded and detected in time chunks (one Colab job each, survives a reclaimed GPU).
+- Colab free GPUs were taken back twice mid-job: jobs now per run and clip, downloaded as they
+  finish, resumed on rerun; a vanished session fails at once.
