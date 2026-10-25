@@ -293,4 +293,4 @@ def test_tile_lights_back_in_full_frame_pixels():
                 ["traffic_light", "traffic_light"])
     out = tile_lights(detect, frame)
     assert [b for b, _ in out] == [(10, 20, 30, 60), (int(1920 * 0.43) + 10, 20, int(1920 * 0.43) + 30, 60)]
-    assert iou((0, 0, 10, 10), (5, 0, 15, 10)) == 50 / 150
+    assert abs(iou((0, 0, 10, 10), (5, 0, 15, 10)) - 50 / 150) < 1e-6
