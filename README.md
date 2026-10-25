@@ -162,6 +162,22 @@ In priority order. Review and reorder this list as priorities change.
       the road, markings, vehicles (boxes) and traffic lights in their colour. Next: vehicle
       headings from their tracks, smoother shapes, pedestrians. (A straightened strip of the whole drive was tried and dropped
       from the dashboard: `strip.py` stays as a possible detector input.)
+      Done 2026-10-25: fixed ground frame (`world.py`), traffic lights as landmarks with poles,
+      vehicles smoothed per track (parked ones fixed), road from many frames
+      (`ground_world.py`), lanes read off it and moving vehicles pulled into a lane (48 %),
+      our bonnet measured and kept out of everything (`bonnet.py`). Running: detection /
+      tracking test at 5–30 fps with tiled detection of distant lights (`detect_test.py`).
+      To do:
+      - *Every vehicle on a lane, for its whole track.* Each road's lanes known (measured
+        lines + OpenStreetMap `lanes` tag on the matched street), each track assigned to one
+        lane (lane changes as explicit events), its motion modelled *along* that lane
+        (position, speed along the lane centre line) — no sideways wiggle, predictable motion,
+        and parked = beside the lanes.
+      - *Vehicle direction at junctions.* Cars on the crossing street are drawn parallel to us
+        (2026_10_24_17_08 at 7:53); headings now come from the traffic labels, with only
+        "crossing" turned 90°. Use the direction of the street they are on (map geometry at
+        the junction, known from the matched route), their measured motion in the ground
+        frame, and the box shape (a car seen from the side is wide and long).
    2. *Review together*: you watch the spatial view and mark where a junction or
       feature is missed; that drives the detector.
    3. *Detector on the ground plan*: first version `side_streets.py` (2026-10-24) finds most
