@@ -232,3 +232,20 @@ def test_speed_from_flow_and_depth_ignores_turning_and_windscreen_dirt():
     # standing still with only dirt and noise: no speed
     t0, _, _, _ = fit_motion(x, y, rng.normal(0, 1e-4, n), rng.normal(0, 1e-4, n), Z, 0.0, ey, still_n=0.3 / 600)
     assert abs(t0) < 0.05
+
+
+def test_overlay_repairs_a_long_digit_misread():
+    import numpy as np
+    import pandas as pd
+    from src.video.overlay import clean
+    t = np.arange(0.5, 120.5, 1.0)
+    lat = 47.0600 + 0.00012 * np.arange(len(t))                 # ~13 m/s north
+    lon = np.full(len(t), 28.8800)
+    bad = (t > 40) & (t < 75)                                    # "47.06…" read as "47.05…" for 35 s
+    read = np.where(bad, lat - 0.01, lat)
+    df = pd.DataFrame(dict(video_s=t, clock=pd.Timestamp("2026-10-24 17:00:00") + pd.to_timedelta(t, "s"),
+                           lat=read, lon=lon, speed_kmh=47.0))
+    out = clean(df)
+    good = out[~out.bad]
+    assert len(good) > 0.9 * len(t)
+    assert np.abs(good.lat.to_numpy() - np.interp(good.video_s, t, lat)).max() < 1e-6

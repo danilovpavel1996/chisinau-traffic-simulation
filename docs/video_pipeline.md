@@ -459,3 +459,33 @@ As the matcher's odometer the better speed has not helped yet (physical junction
 position within 30 m 6/18 → 7/18): the matching is limited by the junction events, not the
 distance between them. Dead-reckoned from the start alone it drifts up to ~400 m (scene flow:
 ~350 m) because the per-road bias accumulates — the model should fix exactly that.
+
+### New drives, GPS digit repair, turn angles from the rotation fit (2026-10-25)
+
+- **The "13.2 km detour" was a broken answer key.** The overlay OCR read latitude 47.05… for
+  47.06… for 32 s on end (three stretches, each ~1.1 km off) — longer than the median filter's
+  window. `overlay.repair_digits` cuts the track where it jumps further than the overlay's own
+  speed allows and shifts whole stretches (≥ 5 s) by one digit when that joins them to their
+  neighbours. 2026_10_24_17_08: 13.2 → 8.94 km by GPS (video odometer: 8.68 km). Other drives
+  unchanged.
+- **Turn angles from speed.py's rotation.** The old angle scales with the assumed field of view,
+  which is fitted to the map turns of the matched route — 132.9° on a wrong route made the left
+  turn onto Bd. Moscova (17:16:36) read 230°, a "U-turn", so the matcher went straight on.
+  The rotation fit uses GeoCalib's focal length, undistorted distant points, vehicles masked:
+  turn size vs GPS heading change 1.4–2.8× → 0.9–1.1× (night 1.4×).
+- **route_search.py**: candidate routes built junction by junction from the events and the
+  metric odometer (Viterbi with a beam), added to the shortest-first candidates — for real
+  detours (> 1.5× the shortest route), which shortest-first listing can never reach.
+  On the four drives it has not changed the chosen route yet.
+- Speed model with four drives, leave-one-drive-out: still no consistent gain (out of town
+  8.5 → 14.5 km/h worse; city drives ±0) — not used.
+
+| drive | route | physical junctions ±8 s | position ≤ 30 m at junctions |
+|---|---|---|---|
+| 2026_10_23_10_06 (day) | right | 7/18 (39 %) | 6/18 (33 %) |
+| 2026_10_23_19_26 (night) | right | 5/12 (42 %) — was 33 % | 2/12 (17 %) |
+| 2026_10_24_15_48 (out of town, map part) | right | 2/4 | 2/4 |
+| 2026_10_24_17_08 (city, 8.9 km) | 66 % of junctions on it — was 17 % | 12/33 (36 %) — was 4/33 | 14/33 (42 %) — was 2/33 |
+
+Speed vs GPS, whole drives, no calibration: correlation 0.93 / 0.90 / 0.82 / 0.93, median
+error 4.8 / 3.6 / 8.8 / 3.5 km/h (day / night / out of town / city).

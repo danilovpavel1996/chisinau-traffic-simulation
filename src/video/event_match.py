@@ -374,6 +374,7 @@ def align(ev: pd.DataFrame, sites: pd.DataFrame, m_ev: np.ndarray, m_total: floa
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 USE_SPEED = False
+USE_SEARCH = True       # add the event-guided routes (route_search.py) to the candidates
 
 
 def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -466,8 +467,13 @@ def run(drv: dict):
     m_ev, m_total = np.interp(ev.t, tt, mm), mm[-1]
     R = RouteMap(load_graph())
     routes, L0 = R.candidate_routes(tuple(drv["start"]), tuple(drv["destination"]))
-    print(f"{len(ev)} video events · {len(routes)} candidate routes (shortest {L0 / 1000:.2f} km, ≤ {MAX_DETOUR}×) "
-          f"· {tt[-1] - tt[0]:.0f} s of video", flush=True)
+    n_short = len(routes)
+    if USE_SEARCH:                                  # long detours: routes built from the events (route_search.py)
+        from src.video.route_search import event_routes
+        known = {tuple(p) for p in routes}
+        routes += [p for p in event_routes(drv, R, ev) if tuple(p) not in known]
+    print(f"{len(ev)} video events · {len(routes)} candidate routes ({n_short} shortest, ≤ {MAX_DETOUR}× {L0 / 1000:.2f} km; "
+          f"{len(routes) - n_short} from the events) · {tt[-1] - tt[0]:.0f} s of video", flush=True)
     scored = []
     for path in routes:
         s = R.sites(path, tuple(drv["start"]), tuple(drv["destination"]))

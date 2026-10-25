@@ -37,6 +37,7 @@ from src.video.motion import ego_states, stops, turns
 
 MERGE_S = 8.0
 SIGNAL_NEAR = 0.035     # traffic-light box height / frame height: close enough to be "this junction"
+USE_SPEED_YAW = True
 SIGNAL_CONF = 0.3       # median detector confidence of the cluster: red leaves through rain drops were
                         # "traffic lights" at 0.11–0.14; the real light passed at 509 s had 0.60 (2026_10_23)
 ROUNDABOUT_EXTRA = 90   # deg of rotation beyond the net angle that marks a roundabout
@@ -54,11 +55,23 @@ def cue_list(drv: dict) -> pd.DataFrame:
     meta = json.loads((folder / "meta.json").read_text())
     e = ego_states(pd.read_parquet(folder / "ego.parquet"), meta["width"], cam["hfov_deg"], cam["hood"])
     dt = e.t.diff().fillna(0)
+    # turn angles from speed.py's rotation when it has run: fitted to distant scene points,
+    # undistorted, with GeoCalib's focal length, vehicles masked. The old angle scales with the
+    # assumed field of view (fitted to map turns, so to whichever route was matched: 132.9° on a
+    # wrong route made a 90° left read as a 230° U-turn; 2026_10_24_17_08 at 17:16:36).
+    # Turn size vs GPS heading change: 1.4–2.8× → 0.9–1.1× (night 1.4×)
+    sp = folder / "speed.parquet"
+    rot = pd.read_parquet(sp).dropna(subset=["yaw_dps"]) if USE_SPEED_YAW and sp.exists() else None
     cues = []
     for r in turns(e).itertuples():
         g = e[(e.t >= r.t_start) & (e.t <= r.t_end)]
         total = float((g.yaw_deg_s.abs() * dt[g.index]).sum())
         signed = r.angle_deg_approx * (1 if r.direction == "right" else -1)
+        if rot is not None:
+            q = rot[(rot.t >= r.t_start - 0.5) & (rot.t <= r.t_end + 0.5)]
+            if len(q) > 1:
+                signed = float(np.trapz(q.yaw_dps, q.t))
+                total = float(np.trapz(q.yaw_dps.abs(), q.t))
         rb = total - abs(signed) > ROUNDABOUT_EXTRA
         cues.append(dict(t=(r.t_start + r.t_end) / 2, kind="roundabout" if rb else "turn", turn_deg=signed))
     for t in crossing_events(folder):

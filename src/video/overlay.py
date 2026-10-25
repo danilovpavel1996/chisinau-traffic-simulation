@@ -38,6 +38,10 @@ OCR_SRC = ROOT / "src" / "video" / "ocr" / "vision_ocr.swift"
 OCR_BIN = ROOT / ".build" / "vision_ocr"
 MEDIAN_S = 21           # rolling-median window (s) of the track used to catch repeated misreads
 OFF_TRACK_M = 250       # m from that median track = a misread (a turn bends it far less)
+MIN_SEG = 5             # only stretches this long are repaired (shorter ones: drop_glitches)
+JUMP_SLACK, JUMP_M = 1.5, 60     # a step longer than 1.5 × overlay speed × time + 60 m is a misread
+DIGIT_FIXES = sorted([(c, sgn * d * 10.0 ** -p) for c in ("lat", "lon") for p in range(1, 6)
+                      for d in range(1, 10) for sgn in (1, -1)], key=lambda x: abs(x[1]))
 PATTERN = re.compile(
     r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}).*?(\d+)\s*mph.*?"
     r"(\d{1,2})\s*°?\s*(\d{1,2}\.\d+)\s*'?\s*([NS]).*?(\d{1,3})\s*°?\s*(\d{1,2}\.\d+)\s*'?\s*([EW])")   # ° often dropped by OCR
@@ -75,18 +79,50 @@ def parse(text: str) -> dict | None:
                 lat=lat, lon=lon)
 
 
-def clean(df: pd.DataFrame) -> pd.DataFrame:
+def repair_digits(df: pd.DataFrame, kx: float) -> pd.DataFrame:
     """
-    Drop OCR misreads: the clock must advance ~1 s per video s (bad_time), positions
-    can't jump > 60 m/s and must exist (bad = not usable as a GPS position).
-    A misread digit (0↔6, 3↔8 in the minutes: ~1 km off) often repeats for several
-    seconds, so a position is also bad when it is far from the rolling median track.
+    A misread digit can persist far longer than the median window: 2026_10_24_17_08 read
+    latitude 47.05… for 47.06… for 32 s on end (1.1 km off) — three such stretches made a
+    13.2 km "GPS route" of an 8.7 km drive. The overlay's own speed says how far the car can
+    move between two readings, so the track is cut where it jumps further; every piece but the
+    longest is tried with one digit of latitude or longitude changed (± 1–9 in one decimal
+    place), and the change is kept if it joins the piece smoothly to its neighbours.
     """
-    df = df.sort_values("video_s").reset_index(drop=True)
-    off = (df.clock - df.clock.min()).dt.total_seconds() - df.video_s
-    df["bad_time"] = (off - off.rolling(15, center=True, min_periods=3).median()).abs() > 3
-    df["bad"] = df.bad_time | df.lat.isna()
-    kx = 111_320 * np.cos(np.radians(df.lat.median()))
+    df = df.copy()
+    for _ in range(2):
+        g = df[~df.bad]
+        if len(g) < 3:
+            return df
+        lat, lon, t = g.lat.to_numpy(), g.lon.to_numpy(), g.video_s.to_numpy()
+        speed = g.speed_kmh if "speed_kmh" in g else pd.Series(np.nan, index=g.index)
+        v = speed.fillna(130).clip(lower=20).to_numpy() / 3.6      # unknown: up to 130 km/h
+        allow = np.maximum(v[1:], v[:-1]) * np.diff(t) * JUMP_SLACK + JUMP_M
+        step = np.hypot(np.diff(lat) * 111_320, np.diff(lon) * kx)
+        cuts = np.flatnonzero(step > allow) + 1
+        if not len(cuts):
+            return df
+        segs = np.split(np.arange(len(g)), cuts)
+        main = max(range(len(segs)), key=lambda k: len(segs[k]))
+        fixed = 0
+        for k, seg in enumerate(segs):
+            if k == main or len(seg) < MIN_SEG:
+                continue
+            a, b = seg[0], seg[-1]
+            for col, delta in DIGIT_FIXES:
+                la, lo = (lat[seg] + delta, lon[seg]) if col == "lat" else (lat[seg], lon[seg] + delta)
+                ok_prev = a == 0 or np.hypot((la[0] - lat[a - 1]) * 111_320, (lo[0] - lon[a - 1]) * kx) <= allow[a - 1]
+                ok_next = b == len(g) - 1 or np.hypot((lat[b + 1] - la[-1]) * 111_320, (lon[b + 1] - lo[-1]) * kx) <= allow[b]
+                if ok_prev and ok_next:
+                    df.loc[g.index[seg], col] = (la if col == "lat" else lo)
+                    fixed += 1
+                    break
+        if not fixed:
+            break
+    return df
+
+
+def drop_glitches(df: pd.DataFrame, kx: float) -> pd.DataFrame:
+    """Short misreads: far from the rolling median track, or jumping > 60 m/s and back."""
     for _ in range(3):
         g = df[~df.bad]
         mid_lat = g.lat.rolling(MEDIAN_S, center=True, min_periods=3).median()
@@ -102,6 +138,24 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         if not jumpy.any():
             break
         df.loc[jumpy[jumpy].index, "bad"] = True
+    return df
+
+
+def clean(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop OCR misreads: the clock must advance ~1 s per video s (bad_time), positions
+    can't jump > 60 m/s and must exist (bad = not usable as a GPS position).
+    A misread digit (0↔6, 3↔8 in the minutes: ~1 km off) often repeats for several
+    seconds, so a position is also bad when it is far from the rolling median track.
+    """
+    df = df.sort_values("video_s").reset_index(drop=True)
+    off = (df.clock - df.clock.min()).dt.total_seconds() - df.video_s
+    df["bad_time"] = (off - off.rolling(15, center=True, min_periods=3).median()).abs() > 3
+    df["bad"] = df.bad_time | df.lat.isna()
+    kx = 111_320 * np.cos(np.radians(df.lat.median()))
+    df = drop_glitches(df, kx)
+    df = repair_digits(df, kx)             # long misread stretches, on what the glitch filters left
+    df = drop_glitches(df, kx)
     return df
 
 
