@@ -351,3 +351,13 @@ def test_gpu_falls_through(tmp_path, monkeypatch):
     assert gpu.run_job("t", "", {}, {}, tmp_path) == "kaggle"
     assert tried == ["modal", "kaggle"]
     assert gpu.run_job("t", "", {}, {}, tmp_path, order=("lightning",)) == "lightning"
+
+
+def test_track_lanes_ignore_flicker():
+    """A car between two lanes for one frame stays in its lane; a lasting move is a lane change."""
+    from src.video import map_layer as M
+    cands = [{0: (0.0, 0, 0.0), 1: (3.2, 1, 0.0)}] * 12
+    flicker = [0.1, -0.2, 0.0, 1.9, 0.2, 0.1, 0.0, -0.1, 0.2, 0.0, 0.1, 0.0]
+    assert M._viterbi(flicker, cands) == [0] * 12
+    change = [0.0] * 6 + [3.1] * 6
+    assert M._viterbi(change, cands) == [0] * 6 + [1] * 6

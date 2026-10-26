@@ -674,3 +674,21 @@ but on city routes it hurt (night drive 15.8 → 21–26 m, also when applied on
 parts). The routes separate clearly by the map alone — 15_48 91 % straight (0.7 bends/km), the city
 routes 48–60 % (2.9–3.8 bends/km) — so the pull is used only on routes ≥ 80 % straight.
 15_48: **52.8 → 15.2 m** median, 27 → 85 % within 30 m; the four city drives unchanged.
+
+### Vehicles bound to one lane per track (2026-10-26)
+
+Snapped frame by frame, a car between two map lanes flipped between them: 0.57 lane switches per track,
+26 % of tracks (17_08), 20.8 sideways jumps > 1.5 m per 1,000 steps. Now each track's lanes are chosen
+for the whole track (Viterbi, `map_layer.snap_vehicles`): a lane is the k-th from the kerb in its
+direction (SUMO lane index — ids change at every edge even straight on); staying is free, a lane change
+costs `LANE_CHANGE`, being off every lane costs as much as a 2.5 m miss each frame. The car sits on that
+lane's centre line and points along it.
+
+| 17_08 | per frame | change cost 12 | **25** | 50 |
+|---|---|---|---|---|
+| jumps > 1.5 m / 1,000 steps | 20.8 | 11.3 | **8.4** | 5.8 |
+| tracks with a lane switch | 26 % | 18 % | **16 %** | 11 % |
+| positions on a map lane | 14,059 | 13,653 | **13,144** | 12,291 |
+
+(10_06: 20.4 → 11.5 jumps at 25.) 25: jumps −45–60 %, 5–7 % fewer positions on a lane; at 50 real
+positions start falling off the lanes. Cars on the video's own lanes (no map lane) are still per frame.

@@ -858,37 +858,101 @@ def build(drv: dict, full: bool = False):
 
 SNAP_M = 2.5                 # a vehicle within this of a map lane's centre line (sideways) is on it
 SNAP_DIR = 45.0              # … if the lane runs its way (± this)
+# Per track, not per frame: snapped frame by frame a car between two lanes flipped between them (city
+# drive 17_08: 1.1 lane switches per track, nearly all flicker). Each track's lanes are chosen for the
+# whole track at once (Viterbi): a lane is "the k-th from the kerb in this direction" (SUMO's lane
+# index — lane ids change at every edge even straight on); staying costs nothing, a lane change
+# LANE_CHANGE, being off every lane OFF_LANE per frame. The car is then put on that lane's centre line
+# and turned along it.
+TRACK_LANES = True
+LANE_SIGMA_M = 0.8           # sideways measurement noise of a vehicle's position
+LANE_CHANGE = 25.0           # cost of a lane change: big sideways jumps 20.8 → 8.4 per 1000 steps (17_08), 5 % fewer on a lane (50: 5.8, 13 % fewer)
+OFF_LANE = (SNAP_M / LANE_SIGMA_M) ** 2
 
 
-def snap_vehicles(frames: list, mp: pd.DataFrame, li: LaneIndex, light_kind: int, labels: dict,
-                  axis_max: float = 30.0) -> pd.DataFrame:
-    """Vehicles running along the road onto the nearest map lane of their direction: moved to its centre
-    line sideways, and the SUMO lane recorded (t, track_id, lane, edge) — lane-level counts later."""
+def _lane_candidates(frames, mp, li, light_kind, labels, axis_max):
+    """(frame index, object index) → {lane index k: (X of its centre line, lane row, lane direction)}."""
     mt = mp.t.to_numpy()
-    rows = []
-    for t, objs in frames:
+    cand = {}
+    for fi, (t, objs) in enumerate(frames):
         if t < mt[0] or t > mt[-1]:
             continue
-        i = int(np.argmin(np.abs(mt - t)))
-        r = mp.iloc[i]
+        r = mp.iloc[int(np.argmin(np.abs(mt - t)))]
         X, Z, _, own, rel = li.car_frame(r.E, r.N, r.heading, radius=60)
         if not len(X):
             continue
-        for o in objs:
+        for oi, o in enumerate(objs):
             if o[1] == light_kind or len(o) < 8 or labels.get(o[0]) == "parked":
                 continue
             h = o[7]
             if abs((h + 90) % 180 - 90) > axis_max:                       # crossing / turning: not along our road
                 continue
-            m = (np.abs(Z - o[3]) < LANE_STEP_M * 1.5) & (np.abs((rel - h + 180) % 360 - 180) < SNAP_DIR)
-            if not m.any():
+            m = np.flatnonzero((np.abs(Z - o[3]) < LANE_STEP_M * 1.5) & (np.abs((rel - h + 180) % 360 - 180) < SNAP_DIR))
+            if not len(m):
                 continue
-            k = np.flatnonzero(m)[np.argmin(np.abs(X[m] - o[2]))]
-            if abs(X[k] - o[2]) <= SNAP_M:
-                o[2] = round(float(X[k]), 2)
-                lane = li.lanes.iloc[own[k]]
-                rows.append(dict(t=t, track_id=o[0], lane=lane.lane, edge=lane.edge))
-    return pd.DataFrame(rows, columns=["t", "track_id", "lane", "edge"])
+            ks = li.lanes["index"].to_numpy()[own[m]]
+            c = {}
+            for k in np.unique(ks):
+                mk = m[ks == k]
+                j = mk[np.argmin(np.abs(X[mk] - o[2]))]
+                c[int(k)] = (float(X[j]), int(own[j]), float(rel[j]))
+            cand[(fi, oi)] = c
+    return cand
+
+
+def _viterbi(xs: list[float], cands: list[dict]) -> list:
+    """Lane index per observation (None = off the map lanes), the cheapest sequence."""
+    states = sorted({k for c in cands for k in c}) + [None]
+    INF = 1e18
+    cost = {s: 0.0 for s in states}
+    back = []
+    for x, c in zip(xs, cands):
+        emit = {s: (OFF_LANE if s is None else (((c[s][0] - x) / LANE_SIGMA_M) ** 2 if s in c else INF)) for s in states}
+        new, bk = {}, {}
+        for s in states:
+            prev = min(states, key=lambda q: cost[q] + (0 if q == s else LANE_CHANGE))
+            new[s] = cost[prev] + (0 if prev == s else LANE_CHANGE) + min(emit[s], INF)
+            bk[s] = prev
+        cost = new
+        back.append(bk)
+    s = min(states, key=lambda q: cost[q])
+    out = [s]
+    for bk in back[:0:-1]:
+        s = bk[s]
+        out.append(s)
+    return out[::-1]
+
+
+def snap_vehicles(frames: list, mp: pd.DataFrame, li: LaneIndex, light_kind: int, labels: dict,
+                  axis_max: float = 30.0) -> pd.DataFrame:
+    """Vehicles running along the road onto a map lane of their direction: moved to its centre line
+    sideways (and, per track, turned along it), the SUMO lane recorded (t, track_id, lane, edge)."""
+    cand = _lane_candidates(frames, mp, li, light_kind, labels, axis_max)
+    rows = []
+    if not TRACK_LANES:
+        for (fi, oi), c in cand.items():
+            o = frames[fi][1][oi]
+            k = min(c, key=lambda q: abs(c[q][0] - o[2]))
+            if abs(c[k][0] - o[2]) <= SNAP_M:
+                o[2] = round(c[k][0], 2)
+                lane = li.lanes.iloc[c[k][1]]
+                rows.append(dict(t=frames[fi][0], track_id=o[0], lane=lane.lane, edge=lane.edge))
+        return pd.DataFrame(rows, columns=["t", "track_id", "lane", "edge"])
+    by_track = {}
+    for key in sorted(cand):
+        by_track.setdefault(frames[key[0]][1][key[1]][0], []).append(key)
+    for tid, keys in by_track.items():
+        objs = [frames[fi][1][oi] for fi, oi in keys]
+        path = _viterbi([o[2] for o in objs], [cand[k] for k in keys])
+        for (fi, oi), o, k in zip(keys, objs, path):
+            if k is None:
+                continue
+            x, row, rel = cand[(fi, oi)][k]
+            o[2] = round(x, 2)
+            o[7] = round(rel, 1)                                           # along its lane
+            lane = li.lanes.iloc[row]
+            rows.append(dict(t=frames[fi][0], track_id=tid, lane=lane.lane, edge=lane.edge, index=k))
+    return pd.DataFrame(rows, columns=["t", "track_id", "lane", "edge", "index"])
 
 
 def evaluate(drv: dict, mp: pd.DataFrame) -> dict:
