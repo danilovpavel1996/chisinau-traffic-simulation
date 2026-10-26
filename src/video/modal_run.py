@@ -20,8 +20,7 @@ from pathlib import Path
 
 VOLUME = "chisinau-jobs"
 GPU = "T4"
-BASE_PIP = ["torch==2.5.1", "torchvision==0.20.1", "opencv-python-headless", "pandas", "pyarrow", "scipy", "pillow",
-            "numpy<2"]
+BASE_PIP = ["torch==2.5.1", "torchvision==0.20.1", "opencv-python-headless<5", "pandas<3", "pyarrow", "scipy", "pillow"]
 
 
 class Unavailable(RuntimeError):
@@ -54,7 +53,10 @@ def run_job(name: str, script: str, uploads: dict[str, Path], downloads: dict[st
             down[remote] = f"/vol/{job}/out/{i}_{Path(remote).name}"
         image = (modal.Image.debian_slim(python_version="3.11")
                  .apt_install("libgl1", "libglib2.0-0", "git", "ffmpeg")
-                 .pip_install(*(BASE_PIP + list(pip or []))))
+                 .pip_install(*(BASE_PIP + list(pip or [])))
+                 # a job's own `pip install` must not swap numpy under the already-imported pandas
+                 .run_commands("python -c \"import numpy; print('numpy==' + numpy.__version__)\" > /constraints.txt")
+                 .env({"PIP_CONSTRAINT": "/constraints.txt"}))
         app = modal.App(f"chisinau-{_slug(name)[:30]}")
     except Exception as e:                                     # setting up failed: Modal unreachable / quota
         raise Unavailable(f"Modal set-up failed: {e}") from e

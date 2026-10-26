@@ -101,10 +101,14 @@
 
 "2026_10_26_10_02":
   video: data/video/raw/2026_10_26_10_02.mp4      # 6 dashcam clips joined (lossless)
-  description: Dashcam (front camera), morning / dry after rain
+  description: Home → office (Zity Mall), dashcam (front camera), morning / dry after rain
   camera:
     hfov_deg: 120
     hood: 0.12
   stride: 6
+  # same route as 2026_10_23_10_06; times from the video's own turn detection, not GPS:
+  street_window_s: [133.0, 901.0]                   # end of the U-turn on Mircești · start of the turn into the mall lot
+  start: [47.058533, 28.812217]                     # Mircești, heading south-east after the U-turn
+  destination: [47.039550, 28.802317]               # Calea Ieșilor, where the car turns into the Zity Mall lot
   overlay:
     height_px: 46
