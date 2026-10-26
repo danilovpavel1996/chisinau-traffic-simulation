@@ -98,9 +98,7 @@
     </div>
   </section>
   <section class="card bevcard" aria-label="Spatial view">
-    <div class="title">Spatial view
-      <label><input type="radio" name="sview" value="3d" checked> 3D surround</label>
-      <label><input type="radio" name="sview" value="plan"> plan + map</label></div>
+    <div class="title">Spatial view · 3D surround</div>
     <div id="s3d"><canvas id="surround"></canvas></div>
     <video id="sground" muted playsinline preload="auto"></video>
     <video id="bev" muted playsinline preload="auto"></video>
@@ -297,8 +295,7 @@ function start(D) {
   const bev = $("bev");
   if (D.bev) bev.src = D.bev; else if (!D.surround) $("main").classList.add("nobev");
   const card = document.querySelector(".bevcard");
-  document.querySelectorAll('input[name="sview"]').forEach(r => r.onchange = () => card.classList.toggle("plan", r.value === "plan" && r.checked));
-  if (!D.surround) { card.classList.add("plan"); document.querySelector('.bevcard .title').querySelectorAll("label").forEach(l => l.style.display = "none"); }
+  if (!D.surround) { card.classList.add("plan"); card.querySelector(".title").textContent = "Spatial view · plan"; }   // drives without 3D data
   const S3 = surroundView(D);
 
   // ── map ──
