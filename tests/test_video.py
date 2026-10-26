@@ -333,3 +333,21 @@ def test_remote_job_scripts_compile():
                    light_context.SCORE_JOB.format(model="m", texts=json.dumps(["a", "b"]), n_light=1),
                    perception.KAGGLE_JOB.format(video_rel="data/video/raw/x.mp4", key="k", detector="rtdetr2", reid=True)):
         compile(head + script + kaggle_run.JOB_TAIL, "job", "exec")
+
+
+def test_gpu_falls_through(tmp_path, monkeypatch):
+    from src.video import gpu
+    tried = []
+
+    def refuse(name, *a):
+        tried.append(name)
+        raise RuntimeError("no credits")
+
+    def ok(name, *a):
+        tried.append(name)
+
+    monkeypatch.setattr(gpu, "BACKENDS", dict(modal=lambda *a: refuse("modal"), kaggle=lambda *a: ok("kaggle"),
+                                               lightning=lambda *a: ok("lightning"), colab=lambda *a: ok("colab")))
+    assert gpu.run_job("t", "", {}, {}, tmp_path) == "kaggle"
+    assert tried == ["modal", "kaggle"]
+    assert gpu.run_job("t", "", {}, {}, tmp_path, order=("lightning",)) == "lightning"

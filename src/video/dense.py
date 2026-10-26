@@ -145,18 +145,18 @@ def input_height(drv: dict) -> int:
 
 
 def run_kaggle(drv: dict):
-    from src.video import kaggle_run
+    from src.video import gpu
     folder = drv["folder"]
     script = remote_script(drv)
     up = {"/content/input.mp4": input_video(drv)}
     if (folder / "detections.parquet").exists():
         up["/content/detections.parquet"] = folder / "detections.parquet"
     t0 = time.time()
-    kaggle_run.run_job(f"dense {drv['key']}", script, up,
+    gpu.run_job(f"dense {drv['key']}", script, up,
                        {"/content/scene_dense.parquet": folder / "scene_dense.parquet",
                         "/content/depth.parquet": folder / "depth.parquet",
                         "/content/motion.parquet": folder / "motion_dense.parquet"},
-                       folder / "colab" / "kaggle_dense", pip=["transformers==4.46.3"])
+                       folder / "colab" / "kaggle_dense", pip=["transformers==4.46.3"], order=gpu.CLOUD)
     n = len(pd.read_parquet(folder / "scene_dense.parquet"))
     print(f"→ {folder}/scene_dense.parquet, depth.parquet: {n} frames, Kaggle {(time.time() - t0) / 60:.1f} min", flush=True)
 

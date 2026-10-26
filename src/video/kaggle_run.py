@@ -136,19 +136,19 @@ def run_kernel(name: str, script: str, datasets: list[str], out_dir: Path, stage
 # ── any remote script: the Colab jobs unchanged, on Kaggle ─────────────────
 JOB_HEAD = """
 import glob, json, os, shutil, subprocess, sys
-UP, DOWN, PIP = {up}, {down}, {pip}
-inp = os.path.dirname(glob.glob("/kaggle/input/**/" + next(iter(UP.values())), recursive=True)[0])
-for remote, name in UP.items():                       # each input where the script expects it
-    os.makedirs(os.path.dirname(remote), exist_ok=True)
-    shutil.copy(os.path.join(inp, name), remote)
-if PIP:
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *PIP], check=True)
+_JOB_UP, _JOB_DOWN, _JOB_PIP = {up}, {down}, {pip}     # names no job script uses
+_JOB_IN = os.path.dirname(glob.glob("/kaggle/input/**/" + next(iter(_JOB_UP.values())), recursive=True)[0])
+for _r, _n in _JOB_UP.items():                        # each input where the script expects it
+    os.makedirs(os.path.dirname(_r), exist_ok=True)
+    shutil.copy(os.path.join(_JOB_IN, _n), _r)
+if _JOB_PIP:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *_JOB_PIP], check=True)
 os.chdir("/content")
 """
 JOB_TAIL = """
 os.makedirs("/kaggle/working/out", exist_ok=True)
-for remote, name in DOWN.items():
-    shutil.copy(remote, os.path.join("/kaggle/working/out", name))
+for _r, _n in _JOB_DOWN.items():
+    shutil.copy(_r, os.path.join("/kaggle/working/out", _n))
 print("job done", flush=True)
 """
 

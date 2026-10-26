@@ -139,7 +139,7 @@ print("done", len(rows), "frame pairs", flush=True)
 def run_kaggle(drv: dict):
     import inspect
     import tempfile
-    from src.video import kaggle_run
+    from src.video import gpu
     boxes, img_h, bonnet = inputs(drv)
     script = REMOTE.format(grid=GRID, per_cell=PER_CELL, fb=FB_MAX_PX, step=FRAME_STEP, img_h=img_h, bonnet=bonnet,
                            corners=inspect.getsource(corners), track=inspect.getsource(track))
@@ -148,8 +148,8 @@ def run_kaggle(drv: dict):
     bj = work / "boxes.json"
     bj.write_text(json.dumps(boxes))
     t0 = time.time()
-    kaggle_run.run_job(f"points {drv['key']}", script, {"/content/input.mp4": input_video(drv), "/content/boxes.json": bj},
-                       {"/content/motion.parquet": drv["folder"] / "motion.parquet"}, work)
+    gpu.run_job(f"points {drv['key']}", script, {"/content/input.mp4": input_video(drv), "/content/boxes.json": bj},
+                       {"/content/motion.parquet": drv["folder"] / "motion.parquet"}, work, order=gpu.CLOUD)
     m = pd.read_parquet(drv["folder"] / "motion.parquet")
     print(f"→ {drv['folder'] / 'motion.parquet'}: {len(m)} frame pairs; Kaggle {(time.time() - t0) / 60:.1f} min", flush=True)
 

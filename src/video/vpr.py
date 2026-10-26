@@ -179,7 +179,7 @@ for name in ("photos", "frames"):
 def prints(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame) -> tuple[dict, dict]:
     """EigenPlaces descriptors of the photos and our frames (Kaggle): {file: vector}."""
     import zipfile
-    from src.video import kaggle_run
+    from src.video import gpu
     work = drv["folder"] / "vpr"
     done = work / "photos.npy"
     if not done.exists():
@@ -190,7 +190,7 @@ def prints(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame) -> tuple[dict,
         with zipfile.ZipFile(fz, "w", zipfile.ZIP_STORED) as z:
             for f in frames.file:
                 z.write(work / f, f)
-        kaggle_run.run_job(f"vpr {drv['key']}", PRINT_JOB.format(), {"/content/photos.zip": pz, "/content/frames.zip": fz},
+        gpu.run_job(f"vpr {drv['key']}", PRINT_JOB.format(), {"/content/photos.zip": pz, "/content/frames.zip": fz},
                            {f"/content/{n}.{x}": work / f"{n}.{x}" for n in ("photos", "frames") for x in ("npy", "txt")},
                            work / "kaggle")
     out = []
@@ -290,8 +290,11 @@ for i, r in enumerate(pairs.itertuples()):
     n = 0
     if len(k) >= 8:
         p0 = rbd(a)["keypoints"].cpu().numpy()[k[:, 0]]; p1 = rbd(b)["keypoints"].cpu().numpy()[k[:, 1]]
-        F, mask = cv2.findFundamentalMat(p0, p1, cv2.USAC_MAGSAC, 1.5, 0.999, 10000)
-        n = int(mask.sum()) if mask is not None else 0
+        try:                                          # degenerate point sets make OpenCV's RANSAC assert
+            F, mask = cv2.findFundamentalMat(p0, p1, cv2.USAC_MAGSAC, 1.5, 0.999, 10000)
+            n = int(mask.sum()) if mask is not None else 0
+        except cv2.error:
+            n = 0
     inl.append(n)
     if (i + 1) % 500 == 0:
         print(i + 1, "pairs", flush=True)
@@ -304,7 +307,7 @@ print("done", len(pairs), flush=True)
 def verify(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame, P: dict, Fv: dict, out: pd.DataFrame) -> pd.DataFrame:
     """Per frame, the TOP_K most similar photos near the aligned position, checked by point matching
     on Kaggle; returns the pairs with their inlier counts."""
-    from src.video import kaggle_run
+    from src.video import gpu
     work = drv["folder"] / "vpr"
     vf = work / "verified.parquet"
     if vf.exists():
@@ -325,7 +328,7 @@ def verify(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame, P: dict, Fv: d
     pairs = pd.DataFrame(rows)
     pf = work / "pairs.parquet"
     pairs.to_parquet(pf, index=False)
-    kaggle_run.run_job(f"verify {drv['key']}", VERIFY_JOB.format(),
+    gpu.run_job(f"verify {drv['key']}", VERIFY_JOB.format(),
                        {"/content/photos.zip": work / "photos.zip", "/content/frames.zip": work / "frames.zip",
                         "/content/pairs.parquet": pf},
                        {"/content/verified.parquet": vf}, work / "kaggle_verify")
