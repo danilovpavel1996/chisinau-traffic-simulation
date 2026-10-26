@@ -177,7 +177,7 @@ def ground_video(drv: dict, geo: Geometry) -> int:
     return len(times)
 
 
-def objects(drv: dict, geo: Geometry) -> list:
+def objects(drv: dict, geo: Geometry, mapped=None) -> list:
     """[[t, [[track_id, kind, X, Z, width, Y, extra(, heading)], …]], …]  (extra: crossing for vehicles,
     colour for lights; heading in degrees for vehicles, see add_headings)."""
     folder, cam = drv["folder"], drv["camera"]
@@ -266,8 +266,18 @@ def objects(drv: dict, geo: Geometry) -> list:
             for (_, o), h in zip(refs, hd):
                 o.append(round(float(h), 1))
         print(f"   {(obs.track_id.nunique() if len(obs) else 0)} vehicle tracks: heading from box shape + track", flush=True)
-        if (folder / "lanes_world.parquet").exists():        # after the headings: only vehicles along our road
-            snap_to_lanes(out, pd.read_parquet(folder / "lanes_world.parquet"), labels)
+        if mapped is not None:                                # after the headings: onto map lanes (SUMO)
+            from src.video import map_layer
+            _, mp, li = mapped
+            vl = map_layer.snap_vehicles(out, mp, li, KINDS.index("traffic_light"), labels, LANE_AXIS_DEG)
+            vl.to_parquet(folder / "vehicle_lanes.parquet", index=False)
+            moving = sum(1 for _, r in out for o in r if o[1] != KINDS.index("traffic_light") and len(o) > 7
+                         and labels.get(o[0]) != "parked" and abs((o[7] + 90) % 180 - 90) <= LANE_AXIS_DEG)
+            print(f"   map lanes: {len(vl) / max(moving, 1):.0%} of moving-vehicle positions on a SUMO lane "
+                  f"({vl.track_id.nunique()} vehicles, {vl.lane.nunique()} lanes) → vehicle_lanes.parquet", flush=True)
+        if (folder / "lanes_world.parquet").exists():        # the rest: the lanes seen in the video
+            done = set(zip(vl.t, vl.track_id)) if mapped is not None else None
+            snap_to_lanes(out, pd.read_parquet(folder / "lanes_world.parquet"), labels, done)
         return out
         print(f"   {len(marks)} traffic lights as landmarks ({(light_obs.mark >= 0).mean():.0%} of light detections)", flush=True)
     add_headings(out, EgoMotion(drv), labels)
@@ -306,7 +316,7 @@ def lane_bounds(g: pd.DataFrame) -> np.ndarray:
     return np.array(b)
 
 
-def snap_to_lanes(frames: list, lanes: pd.DataFrame, labels: dict):
+def snap_to_lanes(frames: list, lanes: pd.DataFrame, labels: dict, skip: set | None = None):
     """Moving vehicles to the middle of the lane they are in (lane_bounds at the nearest 5-m band
     ahead, ground_world.lane_lines). Parked cars keep their place — they stand beside the lanes."""
     light = KINDS.index("traffic_light")
@@ -336,6 +346,8 @@ def snap_to_lanes(frames: list, lanes: pd.DataFrame, labels: dict):
             if o[1] == light or labels.get(o[0]) == "parked" or not 3 < o[3] < 43:
                 continue
             if len(o) > 7 and abs((o[7] + 90) % 180 - 90) > LANE_AXIS_DEG:      # crossing / turning: not our lanes
+                continue
+            if skip and (t, o[0]) in skip:                    # already on a map lane
                 continue
             total += 1
             b = bands[zs[int(np.argmin(np.abs(zs - o[3])))]]
@@ -413,9 +425,16 @@ def run(drv: dict, objects_only: bool = False):
                                 WORLD_PX_PER_M, STYLE, DARK)
     else:
         n = ground_video(drv, geo)
-    frames = objects(drv, geo)
+    mapped = None
+    if (folder / "event_match.json").exists() and (folder / "speed.parquet").exists():
+        from src.video import map_layer                    # SUMO lanes / signalised junctions around us
+        mapped = map_layer.build(drv, full=True)
+    frames = objects(drv, geo, mapped)
     data = dict(ground=dict(video=f"processed/{drv['key']}/surround_ground.mp4", x_range=X_RANGE, z_range=Z_RANGE),
                 kinds=KINDS, camera_height=round(geo.h, 2), frames=frames)
+    if mapped is not None:
+        data["map"] = mapped[0]
+        print(f"   map layer: {len(data['map']['lanes'])} lane edges, {len(data['map']['tl_junctions'])} signalised junctions", flush=True)
     (folder / "surround_data.js").write_text("window.SURROUND = " + json.dumps(data, separators=(",", ":")) + ";\n")
     n_obj = sum(len(f[1]) for f in frames)
     print(f"→ {folder / 'surround_ground.mp4'} ({n} frames) and surround_data.js: {len(frames)} detection frames, "

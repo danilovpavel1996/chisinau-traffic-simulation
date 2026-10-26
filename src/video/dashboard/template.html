@@ -109,6 +109,8 @@
       <span><span class="sw" style="background:#a4aab4"></span>vehicle</span>
       <span><span class="sw" style="background:#f2a33a"></span>crossing</span>
       <span><span class="sw" style="background:#ff3b30;border-radius:50%"></span><span class="sw" style="background:#34c759;border-radius:50%"></span>traffic light</span>
+      <span><span class="sw" style="background:#6fa8ff"></span>map lanes</span>
+      <span><span class="sw" style="background:#ffb020"></span>signalised junction (map)</span>
       <span>drag to look around · scroll to zoom</span>
     </div>
     <div class="bevlegend legendplan">
@@ -206,6 +208,34 @@ function surroundView(D) {
     g.add(pole); g.userData.pole = pole; return g; };
   const LAMP = [0x777777, 0xff3b30, 0xffcc00, 0x34c759];
 
+  // the map around us (SUMO lanes, signalised junctions; map_layer.py), drawn faintly: the parts the
+  // camera does not see. Stored once in map metres (x = east, z = −north); each frame it is turned and
+  // shifted by our map position — locked sideways to the lane lines seen, along the road to ~25 m
+  let mapOuter = null, mapInner = null, MP = null, MPT = null;
+  if (D.surround.map) {
+    const M = D.surround.map;
+    mapOuter = new THREE.Group(); mapInner = new THREE.Group(); mapOuter.add(mapInner); scene.add(mapOuter);
+    const pos = [];
+    for (const l of M.lanes) for (let i = 0; i + 3 < l.length; i += 2) pos.push(l[i], 0.04, l[i + 1], l[i + 2], 0.04, l[i + 3]);
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    mapInner.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x6fa8ff, transparent: true, opacity: 0.5 })));
+    for (const p of M.tl_junctions) {
+      const q = []; for (let i = 0; i + 1 < p.length; i += 2) q.push(new THREE.Vector3(p[i], 0.06, p[i + 1]));
+      mapInner.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(q), new THREE.LineBasicMaterial({ color: 0xffb020 })));
+    }
+    MP = M.pose; MPT = MP.map(p => p[0]);
+  }
+  const placeMap = t => {
+    if (!mapOuter) return;
+    if (t < MPT[0] || t > MPT[MPT.length - 1]) { mapOuter.visible = false; return; }
+    let lo = 0, hi = MPT.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (MPT[m] <= t) lo = m; else hi = m - 1; }
+    const a = MP[lo], b = MP[Math.min(lo + 1, MP.length - 1)], k = b[0] > a[0] ? (t - a[0]) / (b[0] - a[0]) : 0;
+    const dh = ((b[3] - a[3] + 540) % 360) - 180;
+    mapOuter.visible = true;
+    mapOuter.rotation.y = (a[3] + dh * k) * Math.PI / 180;
+    mapInner.position.set(-(a[1] + (b[1] - a[1]) * k), 0, a[2] + (b[2] - a[2]) * k);
+  };
   const F = D.surround.frames, FT = F.map(f => f[0]);
   const at = t => { let lo = 0, hi = FT.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (FT[m] <= t) lo = m; else hi = m - 1; } return lo; };
   function resize() {
@@ -243,6 +273,7 @@ function surroundView(D) {
       m.visible = true; seen.add(key);
     }
     for (const [key, m] of pool) if (!seen.has(key)) m.visible = false;
+    placeMap(t);
     css.render(cssScene, camera);
     renderer.render(scene, camera);
   }

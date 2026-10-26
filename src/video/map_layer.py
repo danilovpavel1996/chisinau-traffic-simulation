@@ -529,6 +529,165 @@ def register(drv: dict, mp: pd.DataFrame, pose) -> tuple[pd.DataFrame, dict]:
     return out, dict(windows=len(F), shift_median_m=round(float(np.median(np.hypot(F.dE, F.dN))), 1))
 
 
+# ── sideways lock, and the layer for the 3D view ────────────────────────────
+LANE_STEP_M = 2.0            # map lane centre lines resampled to points this far apart
+NEAR_M = 30.0                # map lanes this near are compared with the video's lines …
+LOCK_Z = (3.0, 15.0)         # … over this stretch ahead
+LOCK_SHIFT = np.arange(-6.0, 6.01, 0.1)
+LOCK_SMOOTH_S = 3.0
+LAYER_M = 60.0               # map lanes within this of our route go into the 3D view
+
+
+class LaneIndex:
+    """Vehicle lanes near a route as resampled points (E, N, lane row, direction)."""
+
+    def __init__(self, route: np.ndarray, margin: float):
+        from scipy.spatial import cKDTree
+        lanes = pd.read_parquet(OUT / "lanes.parquet")
+        first = np.array([json.loads(x)[0] for x in lanes["shape"]])
+        lo, hi = route.min(0) - margin - 300, route.max(0) + margin + 300
+        lanes = lanes[(first >= lo).all(1) & (first <= hi).all(1)].reset_index(drop=True)
+        rt = cKDTree(route)
+        pts, own, dirs = [], [], []
+        for i, r in enumerate(lanes.itertuples()):
+            p = np.array(json.loads(r.shape))
+            seg = np.hypot(*np.diff(p, axis=0).T)
+            if not len(seg) or seg.sum() < 1:
+                continue
+            cum = np.r_[0, np.cumsum(seg)]
+            d = np.arange(0, cum[-1] + 1e-6, LANE_STEP_M)
+            q = np.column_stack([np.interp(d, cum, p[:, 0]), np.interp(d, cum, p[:, 1])])
+            if rt.query(q)[0].min() > margin:
+                continue
+            h = np.degrees(np.arctan2(*np.gradient(q, axis=0).T[::1])) if len(q) > 1 else np.zeros(1)
+            pts.append(q); own += [i] * len(q); dirs.append(h)
+        self.lanes = lanes
+        self.pts = np.vstack(pts)
+        self.own = np.array(own)
+        self.dir = np.concatenate(dirs) % 360
+        self.tree = cKDTree(self.pts)
+
+    def car_frame(self, E, N, heading, radius=NEAR_M):
+        """Nearby lane points in our car frame: X right, Z ahead; their lane rows and relative directions."""
+        idx = np.array(self.tree.query_ball_point([E, N], radius), int)
+        if not len(idx):
+            return np.zeros(0), np.zeros(0), idx, idx, np.zeros(0)
+        th = np.radians(heading)
+        dx, dy = self.pts[idx, 0] - E, self.pts[idx, 1] - N
+        X = dx * np.cos(th) - dy * np.sin(th)
+        Z = dx * np.sin(th) + dy * np.cos(th)
+        rel = (self.dir[idx] - heading + 180) % 360 - 180
+        return X, Z, idx, self.own[idx], rel
+
+
+def lateral_lock(drv: dict, mp: pd.DataFrame, li: LaneIndex) -> pd.DataFrame:
+    """Shift the map position sideways so the map's lane boundaries beside us fall on the lane lines
+    the video measures (lanes_world.parquet); with no lines seen, into the middle of a map lane."""
+    lw = drv["folder"] / "lanes_world.parquet"
+    lines = pd.read_parquet(lw) if lw.exists() else pd.DataFrame(columns=["t", "z", "kind", "x"])
+    lines = lines[(lines.kind == "line") & (lines.z <= LOCK_Z[1])]
+    by_t = {t: g.x.to_numpy() for t, g in lines.groupby("t")}
+    lt = np.array(sorted(by_t))
+    shifts = []
+    for r in mp.iloc[::5].itertuples():                                # once per second
+        X, Z, _, own, rel = li.car_frame(r.E, r.N, r.heading)
+        m = (Z >= LOCK_Z[0]) & (Z <= LOCK_Z[1]) & (np.abs(rel) < 30)
+        if not m.any():
+            shifts.append((r.t, np.nan))
+            continue
+        cen = pd.Series(X[m]).groupby(own[m]).median()
+        widths = li.lanes.width.to_numpy()[cen.index.to_numpy()]
+        bounds = np.sort(np.r_[cen.to_numpy() - widths / 2, cen.to_numpy() + widths / 2])
+        seen = by_t[lt[np.argmin(np.abs(lt - r.t))]] if len(lt) and np.min(np.abs(lt - r.t)) < 0.5 else np.array([])
+        if len(seen):
+            cost = [np.minimum(np.abs(seen[:, None] - (bounds[None, :] + s_)).min(1), 1.5).sum() for s_ in LOCK_SHIFT]
+            shifts.append((r.t, float(LOCK_SHIFT[int(np.argmin(cost))])))
+        else:                                                          # into the middle of the nearest lane
+            c = cen.to_numpy()
+            shifts.append((r.t, float(-c[np.argmin(np.abs(c))])))
+    S = pd.DataFrame(shifts, columns=["t", "s"]).interpolate(limit_direction="both").fillna(0)
+    S["s"] = S.s.rolling(int(LOCK_SMOOTH_S) * 2 + 1, center=True, min_periods=1).median()
+    sft = np.interp(mp.t, S.t, S.s)
+    th = np.radians(mp.heading)
+    out = mp.copy()
+    out["E"] = mp.E - sft * np.cos(th)                                # map moves right by s = we move left
+    out["N"] = mp.N + sft * np.sin(th)
+    out["lateral_shift"] = sft
+    return out
+
+
+def layer(drv: dict, mp: pd.DataFrame, li: LaneIndex) -> dict:
+    """The map for the 3D view: lane edges and signalised junction outlines near the route (metres from
+    an origin, three.js layout x = east, z = −north), and our map pose per frame."""
+    E0, N0 = float(mp.E.iat[0]), float(mp.N.iat[0])
+    edges = []
+    for r in li.lanes.iloc[np.unique(li.own)].itertuples():          # only lanes near the route
+        p = np.array(json.loads(r.shape))
+        if len(p) < 2:
+            continue
+        d = np.gradient(p, axis=0)
+        n = np.column_stack([d[:, 1], -d[:, 0]]) / np.maximum(np.hypot(*d.T), 1e-6)[:, None]   # right normal
+        for side in (-0.5, 0.5):
+            q = p + n * r.width * side
+            edges.append(np.round(np.column_stack([q[:, 0] - E0, -(q[:, 1] - N0)]), 2).ravel().tolist())
+    j = pd.read_parquet(OUT / "junctions.parquet")
+    j = j[j.type == "traffic_light"]
+    near = np.hypot(j.x.to_numpy()[:, None] - li.pts[::20, 0][None], j.y.to_numpy()[:, None] - li.pts[::20, 1][None]).min(1) < LAYER_M
+    tl = [np.round(np.column_stack([np.array(json.loads(sh))[:, 0] - E0, -(np.array(json.loads(sh))[:, 1] - N0)]), 2).ravel().tolist()
+          for sh in j[near]["shape"]]
+    pose = np.column_stack([mp.t, mp.E - E0, mp.N - N0, mp.heading])[::1]
+    return dict(lanes=edges, tl_junctions=tl, pose=np.round(pose, 2).tolist())
+
+
+def build(drv: dict, full: bool = False):
+    """map_pose.parquet (placed + locked sideways) and the 3D view's map layer (with full: also the
+    pose table and lane index, for putting vehicles on map lanes)."""
+    mp = pose_on_map(drv)
+    em = json.loads((drv["folder"] / "event_match.json").read_text())["route"]
+    to = utm()
+    re_, rn = to.transform(em["lon"], em["lat"])
+    li = LaneIndex(np.column_stack([re_, rn]), LAYER_M)
+    mp = lateral_lock(drv, mp, li)
+    mp.to_parquet(drv["folder"] / "map_pose.parquet", index=False)
+    lay = layer(drv, mp, li)
+    return (lay, mp, li) if full else lay
+
+
+SNAP_M = 2.5                 # a vehicle within this of a map lane's centre line (sideways) is on it
+SNAP_DIR = 45.0              # … if the lane runs its way (± this)
+
+
+def snap_vehicles(frames: list, mp: pd.DataFrame, li: LaneIndex, light_kind: int, labels: dict,
+                  axis_max: float = 30.0) -> pd.DataFrame:
+    """Vehicles running along the road onto the nearest map lane of their direction: moved to its centre
+    line sideways, and the SUMO lane recorded (t, track_id, lane, edge) — lane-level counts later."""
+    mt = mp.t.to_numpy()
+    rows = []
+    for t, objs in frames:
+        if t < mt[0] or t > mt[-1]:
+            continue
+        i = int(np.argmin(np.abs(mt - t)))
+        r = mp.iloc[i]
+        X, Z, _, own, rel = li.car_frame(r.E, r.N, r.heading, radius=60)
+        if not len(X):
+            continue
+        for o in objs:
+            if o[1] == light_kind or len(o) < 8 or labels.get(o[0]) == "parked":
+                continue
+            h = o[7]
+            if abs((h + 90) % 180 - 90) > axis_max:                       # crossing / turning: not along our road
+                continue
+            m = (np.abs(Z - o[3]) < LANE_STEP_M * 1.5) & (np.abs((rel - h + 180) % 360 - 180) < SNAP_DIR)
+            if not m.any():
+                continue
+            k = np.flatnonzero(m)[np.argmin(np.abs(X[m] - o[2]))]
+            if abs(X[k] - o[2]) <= SNAP_M:
+                o[2] = round(float(X[k]), 2)
+                lane = li.lanes.iloc[own[k]]
+                rows.append(dict(t=t, track_id=o[0], lane=lane.lane, edge=lane.edge))
+    return pd.DataFrame(rows, columns=["t", "track_id", "lane", "edge"])
+
+
 def evaluate(drv: dict, mp: pd.DataFrame) -> dict:
     """Against the GPS answer key: placement error, and the matcher's own trace for comparison."""
     gps = drives.gps_track(drv)
@@ -552,13 +711,13 @@ def main():
         extract()
     if a.drive:
         drv = drives.load(a.drive)
-        mp = pose_on_map(drv)
-
-        mp.to_parquet(drv["folder"] / "map_pose.parquet", index=False)
-        print(f"→ {drv['folder'] / 'map_pose.parquet'}: {len(mp)} frames, route aligned by heading profile", flush=True)
+        lay = build(drv)
+        mp = pd.read_parquet(drv["folder"] / "map_pose.parquet")
+        print(f"→ {drv['folder'] / 'map_pose.parquet'}: {len(mp)} frames; map layer: {len(lay['lanes'])} lane edges, "
+              f"{len(lay['tl_junctions'])} signalised junctions; sideways shift median "
+              f"{np.median(np.abs(mp.lateral_shift)):.1f} m", flush=True)
         if drives.gps_track(drv) is not None:
             print("   vs GPS (answer key):", evaluate(drv, mp), flush=True)
-
 
 if __name__ == "__main__":
     main()
