@@ -624,3 +624,45 @@ key and speed scale only). With that, 10_06: verified photos with ≥ 100 inlier
 frames) 9 m median, 58 % within 10 m (best of the 5 candidates, an oracle, 8 m — the photos available
 are the limit); map position with these as pins **11.5 m median, 44 % within 10 m, 89 % within 30 m**
 (16.8 m, 23 %, 70 % without).
+
+### New dry drive, the matcher's odometer, GPU dispatcher (2026-10-26)
+
+**2026_10_26_10_02** (home → Zity Mall, dry after rain; same route as the rainy 10_06). Window
+133–901 s from the video's own turns. Dry vs rain: speed vs GPS 0.94 / 2.9 km/h (10_06: 0.93 /
+4.8); 48k vehicle detections (34k), 3,025 traffic-light detections (1,351); 30 real lights (37);
+photo matching 12 m median along the route, 42 % within 10 m (the best of all drives); map position
+15.4 m median, 78 % within 30 m (10_06: 11.5 m, 89 %). The clear view helps seeing, not placing.
+
+**The matcher's odometer is now speed.py** (`USE_SPEED`). Junction events in the slow queue on Calea
+Ieșilor came out 230–330 m ahead on both 10_06 and 10_02 although the speed there is right (735 m
+driven vs 684 m GPS): the scene-flow odometer was the weak part. Tested once before on 10_06 alone with
+the older speed (no gain); now, on five drives, physical junctions at the right moment:
+
+| drive | scene flow | speed.py | + route length |
+|---|---|---|---|
+| 10_06 | 6/18 | 7/18 | 7/18 |
+| 17_08 | 13/33 | 14/33 | 14/33 |
+| 19_26 | 6/12 | 9/12 | 9/12 |
+| 15_48 | 0/3 (wrong road) | 1/3 | **2/3, right road** |
+| 10_02 | 4/19 | 8/19 | 8/19 |
+| total | 29/85 | 39/85 | **40/85** |
+
+**Route length.** The matcher stretched the odometer to fit each candidate route, so a longer route
+cost nothing: 15_48 took a 3.54 km detour (Bd. Dacia, Str. Aeroport) over the 2.83 km of Șos. Muncești
+it drove. The raw speed reads 0.81–0.96 × the true distance on five drives (median 0.86 — one constant
+for this camera); a route needing the odometer more than ~12 % off that is penalised (`length_cost`).
+The other four drives are unchanged.
+
+Photo-pin settings swept (inliers 40–150, one pin per 5–20 s, 1–3 photos): the current ones
+(100, 10 s, 3) are within 0.6 m of the best on average — not changed.
+
+**GPU dispatcher** (`gpu.py`): Modal → Kaggle → Lightning (not set up) → Colab → the laptop, falling
+through on refusal or failure. `modal_run.py`: inputs on a Modal volume, a T4, the image cached
+(numpy 2 for current pyarrow; pandas < 3 and OpenCV < 5 as on the laptop). All remote steps go through it
+(dense, scene, points, perception, light check, photo matching and verification); the steps with their own
+Colab code keep it as the last resort. The light check on Modal reproduced Kaggle's scores (≤ 0.02).
+
+15_48 on the right road: photo matching (Modal) 36 m along the route, verified photos 24 m (49 % of
+frames); map position **52.8 m** median, 27 % within 30 m (was 626 m on the wrong road). Still the
+weakest drive: only 158 s inside the street map, on a long, nearly straight road — the heading-profile
+alignment has little to hold on to, and few photos.
