@@ -590,3 +590,11 @@ ours have a Mapillary light near. Much richer than OSM for lights and signs: the
 lights, typed junction signs, and fixed points to pin our position along the road. Token: the
 owner's, in ~/.mapillary/token (header, never in a URL); data is CC BY-SA — fine for this personal,
 non-commercial project.
+
+**Mapillary pins: tried, off.** Our verified lights vs Mapillary's, to fix how far along the route we
+are. Mapillary's "traffic lights" along the city route are 866 heads spaced 1–2 m — the same lights
+detected again photo after photo, spread along the streets rather than one point per light —
+clustered into only 8–19 long "spots"; at the true (GPS) position only 16–17 % of our passings were
+within 15 m of one. Light-to-light offset votes: 25 → 34 m (10_06), 28 → 34 m (17_08); in-order
+spot matching: 25 → 32 m, 28 → 55 m. Mapillary lights stay useful to confirm that a light exists
+(83 % of them within 25 m of one of ours), not to pin a position to a few metres.

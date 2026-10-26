@@ -529,6 +529,139 @@ def register(drv: dict, mp: pd.DataFrame, pose) -> tuple[pd.DataFrame, dict]:
     return out, dict(windows=len(F), shift_median_m=round(float(np.median(np.hypot(F.dE, F.dN))), 1))
 
 
+# ── Mapillary pins: our traffic lights vs Mapillary's ──────────────────────
+PIN_R = 60.0                 # Mapillary lights this near one of ours (as currently placed) are candidates …
+PIN_SIDE = 15.0              # … if no farther sideways than this (sideways is locked to the lane lines)
+PIN_WINDOW_S = 40.0          # offsets pooled over ±this
+PIN_STEP_S = 10.0
+PIN_BW = 4.0                 # kernel width of the offset vote, metres
+PIN_SUPPORT = 3              # at least this many of our lights must agree (within ±6 m of the peak)
+PIN_MAX = 60.0
+PIN_ROUNDS = 1
+# Off: Mapillary's light heads are not points to pin on — 866 along the 8.9-km city route (spacing 1–2 m),
+# clustered into 8–19 spread-out "spots"; at the true position only 16–17 % of our passings were within
+# 15 m of one. Median error: light-to-light votes 25 → 34 m (10_06), 28 → 34 m (17_08); spot-to-spot
+# matching 25 → 32 m, 28 → 55 m.
+USE_PINS = False
+
+
+def our_lights_on_map(drv: dict, mp: pd.DataFrame, pose) -> pd.DataFrame:
+    """Our verified light landmarks placed on the map with the current estimate, at the moment we pass
+    them: t, E, N, and the route direction there (ux, uy)."""
+    L = pd.read_parquet(drv["folder"] / "lights.parquet")
+    L = L[L.real]
+    rows = []
+    for m in L.itertuples():
+        ts = np.arange(m.t_first, m.t_last + 20, 0.2)
+        X, Z = pose.to_car(ts, m.x, m.z)
+        k = int(np.argmin(np.abs(Z - 5)))                         # nearly beside us: placement least sensitive to heading
+        t = float(ts[k])
+        if t < mp.t.iat[0] or t > mp.t.iat[-1]:
+            continue
+        r = mp.iloc[int(np.argmin(np.abs(mp.t - t)))]
+        th = np.radians(r.heading)
+        rows.append(dict(t=t, E=r.E + X[k] * np.cos(th) + Z[k] * np.sin(th), N=r.N - X[k] * np.sin(th) + Z[k] * np.cos(th),
+                         ux=np.sin(th), uy=np.cos(th)))
+    return pd.DataFrame(rows)
+
+
+CLUSTER_GAP_M = 30.0         # Mapillary lights closer than this along the route: one signalised spot
+OUR_GAP_S = 4.0              # our verified lights passed within this: one spot
+SPOT_SIDE_M = 25.0           # Mapillary lights at most this far from the route
+SPOT_MATCH_M = 70.0          # one of our spots matches a Mapillary spot this near the current estimate …
+SPOT_CONSIST = 0.15          # … in order, distances between consecutive matches agreeing within ±15 % + 15 m
+
+
+def mapillary_spots(drv: dict, route: np.ndarray, cum: np.ndarray) -> np.ndarray:
+    """Distances along the route of Mapillary's signalised spots (its light heads, clustered)."""
+    from scipy.spatial import cKDTree
+    from src.video import mapillary
+    ML = mapillary.route_features(drv)
+    if not len(ML):
+        return np.array([])
+    me, mn = utm().transform(ML.lon.to_numpy(), ML.lat.to_numpy())
+    dd = np.arange(0, cum[-1], 1.0)
+    line = np.column_stack([np.interp(dd, cum, route[:, 0]), np.interp(dd, cum, route[:, 1])])
+    side, idx = cKDTree(line).query(np.column_stack([me, mn]))
+    along = np.sort(dd[idx[side <= SPOT_SIDE_M]])
+    if not len(along):
+        return along
+    groups = np.split(along, np.flatnonzero(np.diff(along) > CLUSTER_GAP_M) + 1)
+    return np.array([np.median(g) for g in groups if len(g) >= 2])         # a single head: too weak
+
+
+def our_spots(drv: dict, pose) -> np.ndarray:
+    """Moments we pass one of our verified lights (beside / over our road), clustered per spot."""
+    L = pd.read_parquet(drv["folder"] / "lights.parquet")
+    L = L[L.real & (L.x_pass.abs() <= SPOT_SIDE_M)]
+    ts = []
+    for m in L.itertuples():
+        tt = np.arange(m.t_first, m.t_last + 20, 0.2)
+        _, Z = pose.to_car(tt, m.x, m.z)
+        k = np.flatnonzero(Z <= 0)
+        if len(k):
+            ts.append(float(tt[k[0]]))
+    ts = np.sort(ts)
+    if not len(ts):
+        return ts
+    groups = np.split(ts, np.flatnonzero(np.diff(ts) > OUR_GAP_S) + 1)
+    return np.array([np.median(g) for g in groups])
+
+
+def mapillary_pins(drv: dict, mp: pd.DataFrame, pose, route: np.ndarray, cum: np.ndarray) -> tuple[pd.DataFrame, int]:
+    """Pin how far along the route we are where we pass a signalised spot that Mapillary has too: our spots
+    and Mapillary's matched in order (current estimate ± SPOT_MATCH_M, consistent distances between
+    matches); between pins the odometer, stretched to fit."""
+    if not (drv["folder"] / "lights.parquet").exists():
+        return mp, 0
+    spots = mapillary_spots(drv, route, cum)
+    ours = our_spots(drv, pose)
+    ours = ours[(ours >= mp.t.iat[0]) & (ours <= mp.t.iat[-1])]
+    if not len(spots) or not len(ours):
+        return mp, 0
+    t = mp.t.to_numpy()
+    px, pz, _ = pose.at(t)
+    odo = np.r_[0, np.cumsum(np.hypot(np.diff(px), np.diff(pz)))]
+    odo_at = lambda x: float(np.interp(x, t, odo))
+    dhat = np.interp(ours, t, mp.d)
+    best = {}                                                   # (i, j) → (count, previous)
+    for i, ti in enumerate(ours):
+        for j in np.flatnonzero(np.abs(spots - dhat[i]) <= SPOT_MATCH_M):
+            cand = (1, None)
+            for (pi, pj), (cnt, _) in best.items():
+                if pi < i and pj < j:
+                    dd, do = spots[j] - spots[pj], odo_at(ti) - odo_at(ours[pi])
+                    if abs(dd - do) <= SPOT_CONSIST * dd + 15 and cnt + 1 > cand[0]:
+                        cand = (cnt + 1, (pi, pj))
+            best[(i, int(j))] = cand
+    if not best:
+        return mp, 0
+    cur = max(best, key=lambda k_: best[k_][0])
+    pins = []
+    while cur is not None:
+        pins.append((float(ours[cur[0]]), float(spots[cur[1]])))
+        cur = best[cur][1]
+    pins = pins[::-1]
+    if len(pins) < 2:
+        return mp, 0
+    a = [(t[0], float(mp.d.iat[0]))] + pins + [(t[-1], float(mp.d.iat[-1]))]
+    at = np.array([x[0] for x in a]); ad = np.maximum.accumulate([x[1] for x in a])
+    d = mp.d.to_numpy().copy()
+    for k in range(len(a) - 1):
+        m = (t >= at[k]) & (t <= at[k + 1])
+        o0, o1 = odo_at(at[k]), odo_at(at[k + 1])
+        sc = np.clip((ad[k + 1] - ad[k]) / max(o1 - o0, 1e-3), 0.7, 1.3)
+        d[m] = ad[k] + (odo[m] - o0) * sc
+    d = np.maximum.accumulate(np.clip(d, 0, cum[-1]))
+    out = mp.copy()
+    out["d"] = d
+    out["E"], out["N"] = np.interp(d, cum, route[:, 0]), np.interp(d, cum, route[:, 1])
+    ahead, back = np.clip(d + 8, 0, cum[-1]), np.clip(d - 8, 0, cum[-1])
+    out["heading"] = np.degrees(np.arctan2(np.interp(ahead, cum, route[:, 0]) - np.interp(back, cum, route[:, 0]),
+                                           np.interp(ahead, cum, route[:, 1]) - np.interp(back, cum, route[:, 1]))) % 360
+    return out, len(pins)
+
+
 # ── sideways lock, and the layer for the 3D view ────────────────────────────
 LANE_STEP_M = 2.0            # map lane centre lines resampled to points this far apart
 NEAR_M = 30.0                # map lanes this near are compared with the video's lines …
@@ -655,7 +788,14 @@ def build(drv: dict, full: bool = False):
     em = json.loads((drv["folder"] / "event_match.json").read_text())["route"]
     to = utm()
     re_, rn = to.transform(em["lon"], em["lat"])
-    li = LaneIndex(np.column_stack([re_, rn]), LAYER_M)
+    route = np.column_stack([re_, rn])
+    if USE_PINS:
+        from src.video.world import Pose
+        cum = np.r_[0, np.cumsum(np.hypot(*np.diff(route, axis=0).T))]
+        for _ in range(PIN_ROUNDS):                                # re-place our lights with the corrected position
+            mp, n_pins = mapillary_pins(drv, mp, Pose(drv), route, cum)
+        mp.attrs["pins"] = n_pins
+    li = LaneIndex(route, LAYER_M)
     mp = lateral_lock(drv, mp, li)
     mp.to_parquet(drv["folder"] / "map_pose.parquet", index=False)
     lay = layer(drv, mp, li)

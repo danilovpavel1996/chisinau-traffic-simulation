@@ -112,6 +112,27 @@ def fetch(drv: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return I, F
 
 
+def route_features(drv: dict, kinds: tuple[str, ...] = (LIGHTS,)) -> pd.DataFrame:
+    """Mapillary map features along the matched route (video only — event_match), cached per drive:
+    id, value, lon, lat. For the pipeline: no GPS involved."""
+    cache = OUT / f"{drv['key']}_route_features.parquet"
+    if not cache.exists():
+        OUT.mkdir(parents=True, exist_ok=True)
+        rt = json.loads((drv["folder"] / "event_match.json").read_text())["route"]
+        path = np.column_stack([rt["lat"], rt["lon"]])
+        d = np.r_[0, np.cumsum(np.hypot(np.diff(path[:, 0]) * 111_320, np.diff(path[:, 1]) * 75_900))]
+        dense = np.column_stack([np.interp(np.arange(0, d[-1], 50), d, path[:, 0]), np.interp(np.arange(0, d[-1], 50), d, path[:, 1])])
+        s = _session()
+        rows = []
+        for b in tiles(dense):
+            for it in _get_box(s, "map_features", b, "id,object_value,geometry"):
+                rows.append(dict(id=it["id"], value=it.get("object_value"), lon=it["geometry"]["coordinates"][0],
+                                 lat=it["geometry"]["coordinates"][1]))
+        pd.DataFrame(rows, columns=["id", "value", "lon", "lat"]).drop_duplicates("id").to_parquet(cache, index=False)
+    F = pd.read_parquet(cache)
+    return F[F.value.fillna("").str.startswith(kinds)].reset_index(drop=True)
+
+
 def report(drv: dict, I: pd.DataFrame, F: pd.DataFrame) -> dict:
     from scipy.spatial import cKDTree
     from src.video import map_layer
