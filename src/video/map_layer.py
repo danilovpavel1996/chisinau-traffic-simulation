@@ -662,6 +662,36 @@ def mapillary_pins(drv: dict, mp: pd.DataFrame, pose, route: np.ndarray, cum: np
     return out, len(pins)
 
 
+# ── photo pins (vpr.py) ─────────────────────────────────────────────────────
+USE_VPR = True
+VPR_EVERY_S = 10.0           # one pin per this many seconds: the median of the confident photo matches
+VPR_MIN = 3                  # … if at least this many in the stretch
+
+
+def vpr_pins(mp: pd.DataFrame, v: pd.DataFrame, route: np.ndarray, cum: np.ndarray) -> tuple[pd.DataFrame, int]:
+    """Pin how far along the route we are on the photo alignment (confident frames, a robust median
+    per VPR_EVERY_S); between pins the estimate's own course (odometer), shifted to fit."""
+    c = v[v.confident]
+    pins = []
+    for t0 in np.arange(c.t.min() if len(c) else 0, (c.t.max() if len(c) else 0) + VPR_EVERY_S, VPR_EVERY_S):
+        w = c[(c.t >= t0) & (c.t < t0 + VPR_EVERY_S)]
+        if len(w) >= VPR_MIN:
+            off = float(np.median(w.d - np.interp(w.t, mp.t, mp.d)))      # photo position − estimate
+            pins.append((float(w.t.median()), off))
+    if len(pins) < 2:
+        return mp, 0
+    pt, po = np.array(pins).T
+    po = pd.Series(po).rolling(3, center=True, min_periods=1).median().to_numpy()
+    d = np.maximum.accumulate(np.clip(mp.d.to_numpy() + np.interp(mp.t, pt, po), 0, cum[-1]))
+    out = mp.copy()
+    out["d"] = d
+    out["E"], out["N"] = np.interp(d, cum, route[:, 0]), np.interp(d, cum, route[:, 1])
+    ahead, back = np.clip(d + 8, 0, cum[-1]), np.clip(d - 8, 0, cum[-1])
+    out["heading"] = np.degrees(np.arctan2(np.interp(ahead, cum, route[:, 0]) - np.interp(back, cum, route[:, 0]),
+                                           np.interp(ahead, cum, route[:, 1]) - np.interp(back, cum, route[:, 1]))) % 360
+    return out, len(pins)
+
+
 # ── sideways lock, and the layer for the 3D view ────────────────────────────
 LANE_STEP_M = 2.0            # map lane centre lines resampled to points this far apart
 NEAR_M = 30.0                # map lanes this near are compared with the video's lines …
@@ -789,6 +819,11 @@ def build(drv: dict, full: bool = False):
     to = utm()
     re_, rn = to.transform(em["lon"], em["lat"])
     route = np.column_stack([re_, rn])
+    vf = drv["folder"] / "vpr.parquet"
+    if USE_VPR and vf.exists():                                   # where Mapillary photos say we are
+        cum = np.r_[0, np.cumsum(np.hypot(*np.diff(route, axis=0).T))]
+        mp, n_vpr = vpr_pins(mp, pd.read_parquet(vf), route, cum)
+        mp.attrs["vpr_pins"] = n_vpr
     if USE_PINS:
         from src.video.world import Pose
         cum = np.r_[0, np.cumsum(np.hypot(*np.diff(route, axis=0).T))]

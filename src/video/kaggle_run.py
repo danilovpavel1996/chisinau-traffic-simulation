@@ -28,6 +28,7 @@ from src.video.drives import ROOT
 KAGGLE = ROOT / ".venv-video" / "bin" / "kaggle"
 POLL_S = 60
 ACCELERATOR = "NvidiaTeslaT4"
+PUSH_TRIES, PUSH_WAIT_S = 12, 300
 
 
 def kaggle(*args: str, capture: bool = True, check: bool = True, timeout: float = 3600) -> str:
@@ -104,7 +105,15 @@ def run_kernel(name: str, script: str, datasets: list[str], out_dir: Path, stage
         id=kid, title=name[:50], code_file="job.py", language="python", kernel_type="script", is_private=True,
         enable_gpu=True, enable_internet=True, dataset_sources=datasets, competition_sources=[], kernel_sources=[])))
     print(f"starting the Kaggle kernel {kid} on {ACCELERATOR}…", flush=True)
-    kaggle("kernels", "push", "-p", str(stage), "--accelerator", ACCELERATOR, capture=False)
+    for attempt in range(PUSH_TRIES):                     # 409: too many sessions at once (free tier) — wait
+        try:
+            kaggle("kernels", "push", "-p", str(stage), "--accelerator", ACCELERATOR, capture=False)
+            break
+        except RuntimeError:
+            if attempt == PUSH_TRIES - 1:
+                raise
+            print(f"   Kaggle would not start it (busy?) — retrying in {PUSH_WAIT_S // 60} min", flush=True)
+            time.sleep(PUSH_WAIT_S)
     t0, last = time.time(), ""
     while True:
         time.sleep(POLL_S)
@@ -160,6 +169,6 @@ def run_job(name: str, script: str, uploads: dict[str, Path], downloads: dict[st
     ds = push_dataset(f"chisinau {name}", {up_names[r]: p for r, p in uploads.items()}, work / "dataset",
                       reuse_if=list(up_names.values()))
     job = JOB_HEAD.format(up=json.dumps(up_names), down=json.dumps(down_names), pip=json.dumps(pip or [])) + script + JOB_TAIL
-    out = run_kernel(f"chisinau {name}", job, [ds], work / "out", work / "kernel")
+    out = run_kernel(f"chisinau {name} job", job, [ds], work / "out", work / "kernel")
     for r, local in downloads.items():
         shutil.move(str(out / "out" / down_names[r]), local)

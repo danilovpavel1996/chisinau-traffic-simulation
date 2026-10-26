@@ -598,3 +598,20 @@ clustered into only 8–19 long "spots"; at the true (GPS) position only 16–17
 within 15 m of one. Light-to-light offset votes: 25 → 34 m (10_06), 28 → 34 m (17_08); in-order
 spot matching: 25 → 32 m, 28 → 55 m. Mapillary lights stay useful to confirm that a light exists
 (83 % of them within 25 m of one of ours), not to pin a position to a few metres.
+
+### Visual place recognition against Mapillary photos (2026-10-26, `vpr.py`)
+
+2026_10_23_10_06: 1,857 Mapillary photos along the matched route (≤ 3 per 5 m, facing our way, no
+panoramas; 63 % of the 5-m bins have one), our frames once a second above the bonnet; EigenPlaces
+(ResNet-50, 2048-d) descriptors on Kaggle. The descriptors discriminate: at the true spot similarity
+0.54 (median), any pair 0.17; the single best photo within ±200 m lies within 15 m of the truth for 48 %
+of frames. Sequence alignment (DP over 5-m route bins, steps bounded by the odometer ± 20 %, per-frame
+z-scores; a fixed cost for photo-less bins first made the path prefer them — 32 m): along the route
+20 m median, ≤ 10 m 25 % (prior 25 m, 17 %); confident frames (z ≥ 4, 57 %) 16 m.
+Fused as pins (median per 10 s) into the map position: 24.5 → 21.5 m, ≤ 10 m 16 → 26 %.
+
+The GPS overlay appears to lag the video by ~1 s: shifting it by +1 s lowers the confident-frame
+error 16 → 12 m — every GPS score so far includes ~10 m of this at city speed.
+Error left varies by stretch (+26 m at 3:00, +32 m at 9:00, ~0 elsewhere): look-alike straight
+roads, or contributors' GPS on some Mapillary sequences. Next: geometric verification with local
+features (relative position between our frame and the photo), more photos per bin.

@@ -321,3 +321,15 @@ def test_vehicle_heading_from_box_shape_while_driving_past():
                          y1=500 - H_ * f, y2=500.0))
     h = vehicle_headings(pd.DataFrame(rows), StraightPose(), 1920, 900, {7: "parked"})
     assert np.all(np.abs(h - 40) < 6)
+
+
+def test_remote_job_scripts_compile():
+    """Every script sent to Kaggle / Colab is valid Python once assembled (escaping mistakes show up
+    only on the remote machine otherwise)."""
+    import json
+    from src.video import kaggle_run, light_context, perception, vpr
+    head = kaggle_run.JOB_HEAD.format(up=json.dumps({"/content/a.mp4": "in0_a.mp4.bin"}), down="{}", pip="[]")
+    for script in (vpr.PRINT_JOB.format(),
+                   light_context.SCORE_JOB.format(model="m", texts=json.dumps(["a", "b"]), n_light=1),
+                   perception.KAGGLE_JOB.format(video_rel="data/video/raw/x.mp4", key="k", detector="rtdetr2", reid=True)):
+        compile(head + script + kaggle_run.JOB_TAIL, "job", "exec")
