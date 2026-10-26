@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -529,6 +530,65 @@ sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}",
     print(f"Colab perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
 
 
+KAGGLE_JOB = """
+import glob, os, shutil, subprocess, sys, time, zipfile
+inp = os.path.dirname(glob.glob("/kaggle/input/**/code.zip", recursive=True)[0])
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "onnxruntime-gpu"], check=True)
+repo, out = "/tmp/repo", "/kaggle/working/out"                    # only out/ is saved as the kernel's output
+zipfile.ZipFile(os.path.join(inp, "code.zip")).extractall(repo)
+os.makedirs(out, exist_ok=True)
+chunks = sorted(glob.glob(os.path.join(inp, "chunk_*.mp4")))
+video = os.path.join(repo, "{video_rel}")
+os.makedirs(os.path.dirname(video), exist_ok=True)
+for c in chunks:
+    i = c.split("chunk_")[1].split(".")[0]
+    t0 = time.time()
+    shutil.copy(c, video)
+    r = subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
+                         "--device", "cuda", "--tiles"] + ([] if {reid} else ["--no-reid"]), cwd=repo)
+    if r != 0:
+        sys.exit(r)
+    for name in ("detections.parquet", "ego.parquet", "meta.json"):
+        stem, ext = name.split(".")
+        shutil.copy(os.path.join(repo, "data/video/processed/{key}", name), os.path.join(out, f"{{stem}}_{{i}}.{{ext}}"))
+    print(f"chunk {{i}} done in {{(time.time() - t0) / 60:.1f}} min", flush=True)
+"""
+
+
+def run_kaggle(drv: dict, detector: str = "rtdetr2", reid: bool = True):
+    """The same chunks as run_colab, on a Kaggle T4 notebook (kaggle_run.py): all chunks in one job
+    (Kaggle does not take the GPU back), results joined the same way."""
+    import io
+    import zipfile
+    from src.video import kaggle_run
+    folder, key = drv["folder"], drv["key"]
+    cap = cv2.VideoCapture(str(drv["video"]))
+    fps, n_frames = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    n_chunks = -(-n_frames // int(round(CHUNK_S * fps)))
+    parts = folder / "colab" / "chunks"
+    parts.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    if not all((parts / f"detections_{i:02d}.parquet").exists() for i in range(n_chunks)):
+        print(f"cutting {n_chunks} chunks (CRF {CHUNK_CRF})…", flush=True)
+        files = {f"chunk_{i:02d}.mp4": chunk_video(drv, i, fps, n_frames)[0] for i in range(n_chunks)}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for rel in SHIP:
+                z.write(ROOT / rel, rel)
+        code = folder / "colab" / "perception_code.zip"
+        code.write_bytes(buf.getvalue())
+        files["code.zip"] = code
+        ds = kaggle_run.push_dataset(f"chisinau dashcam {key}", files, folder / "colab" / "kaggle_dataset")
+        script = KAGGLE_JOB.format(video_rel=drv["video"].relative_to(ROOT), key=key, detector=detector, reid=reid)
+        out = kaggle_run.run_kernel(f"chisinau perception {key}", script, [ds], folder / "colab" / "kaggle_out",
+                                    folder / "colab" / "kaggle_kernel")
+        for f in (out / "out").glob("*"):
+            shutil.move(str(f), parts / f.name)
+    join_chunks(drv, n_chunks, fps, detector)
+    print(f"Kaggle perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+
+
 def join_chunks(drv: dict, n_chunks: int, fps: float, detector: str):
     folder = drv["folder"]
     parts = folder / "colab" / "chunks"
@@ -573,9 +633,12 @@ def main():
     ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
     ap.add_argument("--reuse", action="store_true", help="with --colab: attach to the drive's runtime if still alive")
     ap.add_argument("--tiles", action="store_true", help="also look for distant traffic lights in two tiles of the upper image")
+    ap.add_argument("--kaggle", action="store_true", help="run on a Kaggle T4 notebook (kaggle_run.py)")
     a = ap.parse_args()
     drv = drives.load(a.drive)
-    if a.colab:
+    if a.kaggle:
+        run_kaggle(drv, a.detector or "rtdetr2", not a.no_reid)
+    elif a.colab:
         run_colab(drv, a.detector or "rtdetr2", not a.no_reid, a.reuse)
     else:
         run(drv, a.ego_only, a.start, a.duration, detector=a.detector or "yolo",
