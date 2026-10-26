@@ -715,20 +715,74 @@ def vpr_pins(mp: pd.DataFrame, v: pd.DataFrame, route: np.ndarray, cum: np.ndarr
 LANE_STEP_M = 2.0            # map lane centre lines resampled to points this far apart
 NEAR_M = 30.0                # map lanes this near are compared with the video's lines …
 LOCK_Z = (3.0, 15.0)         # … over this stretch ahead
-LOCK_SHIFT = np.arange(-6.0, 6.01, 0.1)
+LOCK_SHIFT = np.arange(-12.0, 12.01, 0.1)   # the route runs on the street's centre line: on a 3 + 3 boulevard our lane is ~7 m off it
 LOCK_SMOOTH_S = 3.0
+# Lane lines repeat every lane width, so matching them alone is ambiguous by a whole lane (10_02 at 10:11
+# on Bd. Mihai Viteazul: in the right lane, locked into the middle one; the map's right edge 2.5 m beyond
+# the kerb the video saw). The right road edge is not: it is matched too (`EDGE_WEIGHT` × its miss).
+EDGE_WEIGHT = 1.0
+EDGE_MAX_M = 6.0             # a right edge / curb seen this far right at most
 LAYER_M = 60.0               # map lanes within this of our route go into the 3D view
+
+
+USE_VIDEO_LANES = True
+
+
+def _offset(p: np.ndarray, right: float) -> np.ndarray:
+    """A polyline moved sideways, `right` metres to the right of its direction."""
+    d = np.gradient(p, axis=0)
+    n = np.column_stack([d[:, 1], -d[:, 0]]) / np.maximum(np.hypot(*d.T), 1e-6)[:, None]
+    return p + n * right
+
+
+def with_video_lanes(lanes: pd.DataFrame) -> pd.DataFrame:
+    """SUMO lanes, with the lanes of streets OSM has no `lanes` for replaced by the count the video
+    measured (lane_count.py): rebuilt off the street's centre line, lane 0 the rightmost."""
+    from src.video import lane_count
+    C = lane_count.counts()
+    if not len(C):
+        return lanes
+    C = C.set_index("way")
+    W = pd.read_parquet(lane_count.WAYS).set_index("way")
+    keep, new = [], []
+    for edge, g in lanes.groupby("edge", sort=False):
+        way = lane_count.way_of(edge)
+        if way is None or way not in C.index:
+            keep.append(g)
+            continue
+        c = C.loc[way]
+        k = int(c.lanes_backward if edge.startswith("-") else c.lanes_forward)
+        n = len(g)
+        if k < 1 or k == n:
+            keep.append(g)
+            continue
+        oneway = W.oneway.get(way) in ("yes", "1", "-1")
+        g = g.sort_values("index")
+        w0, w = float(g.width.iat[0]), float(c.lane_w_m)
+        lane0 = np.array(json.loads(g["shape"].iat[0]))
+        centre = _offset(lane0, -(((n - 1) / 2) * w0 if oneway else (n - 0.5) * w0))
+        for i in range(k):
+            off = ((k - 1) / 2 - i) * w if oneway else (k - i - 0.5) * w
+            r = g.iloc[0].to_dict()
+            r.update(lane=f"{edge}_{i}", index=i, width=round(w, 2),
+                     shape=json.dumps(np.round(_offset(centre, off), 2).tolist()))
+            new.append(r)
+    out = pd.concat(keep + [pd.DataFrame(new)], ignore_index=True) if new else lanes
+    out.attrs["video_lanes"] = len(new)
+    return out
 
 
 class LaneIndex:
     """Vehicle lanes near a route as resampled points (E, N, lane row, direction)."""
 
-    def __init__(self, route: np.ndarray, margin: float):
+    def __init__(self, route: np.ndarray, margin: float, video_lanes: bool = True):
         from scipy.spatial import cKDTree
         lanes = pd.read_parquet(OUT / "lanes.parquet")
         first = np.array([json.loads(x)[0] for x in lanes["shape"]])
         lo, hi = route.min(0) - margin - 300, route.max(0) + margin + 300
         lanes = lanes[(first >= lo).all(1) & (first <= hi).all(1)].reset_index(drop=True)
+        if video_lanes and USE_VIDEO_LANES:                      # streets OSM gives no lane count: the video's
+            lanes = with_video_lanes(lanes)
         rt = cKDTree(route)
         pts, own, dirs = [], [], []
         for i, r in enumerate(lanes.itertuples()):
@@ -767,8 +821,11 @@ def lateral_lock(drv: dict, mp: pd.DataFrame, li: LaneIndex) -> pd.DataFrame:
     the video measures (lanes_world.parquet); with no lines seen, into the middle of a map lane."""
     lw = drv["folder"] / "lanes_world.parquet"
     lines = pd.read_parquet(lw) if lw.exists() else pd.DataFrame(columns=["t", "z", "kind", "x"])
-    lines = lines[(lines.kind == "line") & (lines.z <= LOCK_Z[1])]
+    near = lines[lines.z <= LOCK_Z[1]]
+    lines = near[near.kind == "line"]
     by_t = {t: g.x.to_numpy() for t, g in lines.groupby("t")}
+    edge = near[near.kind.isin(["edge_right", "curb"]) & (near.x > 0.5) & (near.x < EDGE_MAX_M)]
+    edge_t = edge.groupby("t").x.median()                              # the road's right edge, per frame
     lt = np.array(sorted(by_t))
     shifts = []
     for r in mp.iloc[::5].itertuples():                                # once per second
@@ -781,8 +838,13 @@ def lateral_lock(drv: dict, mp: pd.DataFrame, li: LaneIndex) -> pd.DataFrame:
         widths = li.lanes.width.to_numpy()[cen.index.to_numpy()]
         bounds = np.sort(np.r_[cen.to_numpy() - widths / 2, cen.to_numpy() + widths / 2])
         seen = by_t[lt[np.argmin(np.abs(lt - r.t))]] if len(lt) and np.min(np.abs(lt - r.t)) < 0.5 else np.array([])
-        if len(seen):
-            cost = [np.minimum(np.abs(seen[:, None] - (bounds[None, :] + s_)).min(1), 1.5).sum() for s_ in LOCK_SHIFT]
+        ke = int(np.argmin(np.abs(edge_t.index.to_numpy() - r.t))) if len(edge_t) else -1
+        right = float(edge_t.iat[ke]) if ke >= 0 and abs(edge_t.index[ke] - r.t) < 0.5 else None
+        if len(seen) or right is not None:
+            cost = np.array([np.minimum(np.abs(seen[:, None] - (bounds[None, :] + s_)).min(1), 1.5).mean() if len(seen) else 0.0
+                             for s_ in LOCK_SHIFT])                    # mean: one reading per 5-m band, not per line
+            if right is not None:                                      # the map's right edge on the kerb
+                cost = cost + EDGE_WEIGHT * np.minimum(np.abs(bounds.max() + LOCK_SHIFT - right), 3.0)
             shifts.append((r.t, float(LOCK_SHIFT[int(np.argmin(cost))])))
         else:                                                          # into the middle of the nearest lane
             c = cen.to_numpy()

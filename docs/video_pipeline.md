@@ -692,3 +692,29 @@ lane's centre line and points along it.
 
 (10_06: 20.4 → 11.5 jumps at 25.) 25: jumps −45–60 %, 5–7 % fewer positions on a lane; at 50 real
 positions start falling off the lanes. Cars on the video's own lanes (no map lane) are still per frame.
+
+### Our lane on the map, lane counts from the video, frozen cars (2026-10-27)
+
+Reported on 10_02: the map lanes shifted at 2:20 (Mircești), the car in the middle lane at 10:11 on
+Bd. Mihai Viteazul although it drove in the right one, a car "stuck" on the right at 2:13.
+
+- **Sideways lock.** It matched the map's lane boundaries to the lane lines the video sees — ambiguous by
+  a whole lane, since lines repeat every lane width — and it could shift ±6 m only, while the route runs
+  on the street's centre line (on a 3 + 3 boulevard our lane is ~7 m from it). Now the map's right
+  edge is also matched to the kerb / road edge the video sees, lines count by their mean (one reading
+  per 5-m band), ±12 m. Map right edge vs seen kerb, median: 10_02 1.54 → 0.09 m, 10_06 3.57 → 0.15,
+  17_08 3.42 → 0.20, 19_26 1.21 → 0.13, 15_48 3.51 → 0.71 m. At 10:11 now in the right lane. (GPS is too
+  coarse sideways — 1–4 m — to score lanes.)
+- **Lane counts** (`lane_count.py`). Only 44 % of Chișinău's car roads have an OSM `lanes` tag (residential
+  15 %, secondary 74 %); without one SUMO gives 1 lane per direction — Mircești has 1 + 2. Per second:
+  the lane lines between the kerbs count the lanes (the far kerb is often read too near: Mircești 6.8 m
+  for 3 lanes); per street and drive, which lanes we drove in (right-hand traffic: those are our
+  direction's) and the vehicles seen in each lane. Drives both ways settle the split: towards the mall
+  only the right lane of 3 was driven, towards home the right two → **1 + 2**, as the driver counts.
+  On the 45 OSM-tagged streets measured, the method gets a carriageway's lane count right 33 % of the
+  time and the split 11 % (extra lines for parking / bus strips, far kerbs, and vehicle directions from
+  box shape or image motion are unreliable), so the map uses a count only where ≥ 2 drives agree on the
+  total: 3 ways so far (Mircești, two stretches of Petricani). `data/video/lane_counts.parquet` is
+  city-wide: every drive adds to it.
+- **Frozen cars.** The 3D view stores only moments with detections and kept the last one through gaps:
+  a car last seen at 2:09 stood until the next detection at 2:14. Objects older than 0.4 s are hidden.
