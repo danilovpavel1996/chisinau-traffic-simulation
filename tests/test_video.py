@@ -331,7 +331,7 @@ def test_remote_job_scripts_compile():
     head = kaggle_run.JOB_HEAD.format(up=json.dumps({"/content/a.mp4": "in0_a.mp4.bin"}), down="{}", pip="[]")
     for script in (vpr.PRINT_JOB.format(), vpr.VERIFY_JOB.format(),
                    light_context.SCORE_JOB.format(model="m", texts=json.dumps(["a", "b"]), n_light=1),
-                   perception.KAGGLE_JOB.format(video_rel="data/video/raw/x.mp4", key="k", detector="rtdetr2", reid=True)):
+                   perception.CLOUD_JOB.format(video_rel="data/video/raw/x.mp4", key="k", detector="rtdetr2", reid=True)):
         compile(head + script + kaggle_run.JOB_TAIL, "job", "exec")
 
 

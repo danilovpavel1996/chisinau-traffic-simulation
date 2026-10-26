@@ -530,19 +530,14 @@ sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}",
     print(f"Colab perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
 
 
-KAGGLE_JOB = """
+CLOUD_JOB = """
 import glob, os, shutil, subprocess, sys, time, zipfile
-inp = os.path.dirname(glob.glob("/kaggle/input/**/chunk_00.mp4", recursive=True)[0])
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "onnxruntime-gpu"], check=True)
-repo, out = "/tmp/repo", "/kaggle/working/out"                    # only out/ is saved as the kernel's output
-# Kaggle unpacks an uploaded zip into a folder of the same name
-code = glob.glob("/kaggle/input/**/code/src/video/perception.py", recursive=True)[0].rsplit("/src/video/", 1)[0]
-shutil.copytree(code, repo)
+repo, out = "/tmp/repo", "/content/out"
+zipfile.ZipFile("/content/code.zip").extractall(repo)
 os.makedirs(out, exist_ok=True)
-chunks = sorted(glob.glob(os.path.join(inp, "chunk_*.mp4")))
 video = os.path.join(repo, "{video_rel}")
 os.makedirs(os.path.dirname(video), exist_ok=True)
-for c in chunks:
+for c in sorted(glob.glob("/content/chunk_*.mp4")):
     i = c.split("chunk_")[1].split(".")[0]
     t0 = time.time()
     shutil.copy(c, video)
@@ -555,14 +550,15 @@ for c in chunks:
         shutil.copy(os.path.join(repo, "data/video/processed/{key}", name), os.path.join(out, f"{{stem}}_{{i}}.{{ext}}"))
     print(f"chunk {{i}} done in {{(time.time() - t0) / 60:.1f}} min", flush=True)
 """
+CLOUD_PIP = ["ultralytics", "onnxruntime-gpu", "transformers==4.46.3", "pyyaml"]
 
 
-def run_kaggle(drv: dict, detector: str = "rtdetr2", reid: bool = True):
-    """The same chunks as run_colab, on a Kaggle T4 notebook (kaggle_run.py): all chunks in one job
-    (Kaggle does not take the GPU back), results joined the same way."""
+def run_cloud(drv: dict, detector: str = "rtdetr2", reid: bool = True):
+    """The same chunks as run_colab, as one job on the GPU services (gpu.py: Modal, else Kaggle, …): all
+    chunks in one go (neither takes the GPU back), results joined the same way."""
     import io
     import zipfile
-    from src.video import kaggle_run
+    from src.video import gpu
     folder, key = drv["folder"], drv["key"]
     cap = cv2.VideoCapture(str(drv["video"]))
     fps, n_frames = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -573,31 +569,32 @@ def run_kaggle(drv: dict, detector: str = "rtdetr2", reid: bool = True):
     t0 = time.time()
     if not all((parts / f"detections_{i:02d}.parquet").exists() for i in range(n_chunks)):
         print(f"cutting {n_chunks} chunks (CRF {CHUNK_CRF})…", flush=True)
-        files = {f"chunk_{i:02d}.mp4": chunk_video(drv, i, fps, n_frames)[0] for i in range(n_chunks)}
+        up = {f"/content/chunk_{i:02d}.mp4": chunk_video(drv, i, fps, n_frames)[0] for i in range(n_chunks)}
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             for rel in SHIP:
                 z.write(ROOT / rel, rel)
         code = folder / "colab" / "perception_code.zip"
         code.write_bytes(buf.getvalue())
-        files["code.zip"] = code
-        ds = kaggle_run.push_dataset(f"chisinau dashcam {key}", files, folder / "colab" / "kaggle_dataset",
-                                     reuse_if=[n for n in files if n.endswith(".mp4")])
-        script = KAGGLE_JOB.format(video_rel=drv["video"].relative_to(ROOT), key=key, detector=detector, reid=reid)
-        out = kaggle_run.run_kernel(f"chisinau perception {key}", script, [ds], folder / "colab" / "kaggle_out",
-                                    folder / "colab" / "kaggle_kernel")
-        for f in (out / "out").glob("*"):
-            shutil.move(str(f), parts / f.name)
+        up["/content/code.zip"] = code
+        down = {f"/content/out/{stem}_{i:02d}.{ext}": parts / f"{stem}_{i:02d}.{ext}"
+                for i in range(n_chunks) for stem, ext in (("detections", "parquet"), ("ego", "parquet"), ("meta", "json"))}
+        script = CLOUD_JOB.format(video_rel=drv["video"].relative_to(ROOT), key=key, detector=detector, reid=reid)
+        gpu.run_job(f"perception {key}", script, up, down, folder / "colab" / "cloud_perception", pip=CLOUD_PIP,
+                    order=gpu.CLOUD)
     join_chunks(drv, n_chunks, fps, detector)
-    print(f"Kaggle perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+    print(f"perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+
+
+run_kaggle = run_cloud          # the old name (pipeline, --kaggle)
 
 
 def run_remote(drv: dict, detector: str = "rtdetr2", reid: bool = True):
-    """Kaggle first, Colab if Kaggle fails (no quota, outage)."""
+    """The GPU services first (Modal, Kaggle), this module's own Colab code if they all fail."""
     try:
-        run_kaggle(drv, detector, reid)
+        run_cloud(drv, detector, reid)
     except Exception as e:
-        print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+        print(f"GPU services failed ({e}); trying Colab…", flush=True)
         run_colab(drv, detector, reid)
 
 

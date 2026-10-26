@@ -373,8 +373,19 @@ def align(ev: pd.DataFrame, sites: pd.DataFrame, m_ev: np.ndarray, m_total: floa
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-USE_SPEED = False
+USE_SPEED = True         # speed.py as the odometer: physical junctions 29 → 39 of 85 on five drives (2026-10-26)
 USE_SEARCH = True       # add the event-guided routes (route_search.py) to the candidates
+# With speed.py's metric speed the odometer's total says how long the route is: a route that would
+# need the odometer to be far off is unlikely (2026_10_24_15_48 chose a 3.54 km detour over the
+# 2.83 km road it drove — each route's odometer is otherwise stretched to fit). The raw speed reads
+# ODO_SCALE × the true distance (median of five drives, 0.81–0.96: one constant for this camera).
+USE_LENGTH = True
+ODO_SCALE = 0.86
+LENGTH_SIGMA = 0.12          # relative
+
+
+def length_cost(m_total: float, L: float) -> float:
+    return ((m_total - ODO_SCALE * L) / (LENGTH_SIGMA * ODO_SCALE * L)) ** 2
 
 
 def odometer(drv: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -478,6 +489,8 @@ def run(drv: dict):
     for path in routes:
         s = R.sites(path, tuple(drv["start"]), tuple(drv["destination"]))
         cost, pairs = align(ev, s, m_ev, m_total)
+        if USE_SPEED and USE_LENGTH:
+            cost += length_cost(m_total, s.attrs["length"])
         scored.append((cost, path, s, pairs))
     scored.sort(key=lambda x: x[0])
     # re-rank the best routes on road width: does the video's road get wider / narrower

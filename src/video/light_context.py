@@ -8,7 +8,7 @@ and what each showed over time.
               eye: 10 real; road signs, shop signs, lit displays, poles). Each landmark's three largest
               views are scored by CLIP (openai/clip-vit-large-patch14, zero-shot) against "a traffic
               light / one seen from behind / a pedestrian light" vs the look-alikes: kept 9 of 10 real,
-              3 of 14 false (threshold 0.3). Runs on Kaggle (GPU), else Colab, else here
+              3 of 14 false (threshold 0.3). Runs on a GPU service (gpu.py: Modal, Kaggle, …)
     map       OpenStreetMap's signals (junctions and signalised crossings) confirm a light nearby;
               their absence proves nothing — OSM marks 6 signalised junctions on that route, the
               video found real lights at many more
@@ -49,10 +49,11 @@ FACING_MIN = 0.2             # share of its detections with a colour seen
 HOLD_S = 3.0
 
 SCORE_JOB = """
-import glob, os, json, numpy as np, pandas as pd, torch
+import os, json, zipfile, numpy as np, pandas as pd, torch
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
-inp = os.path.dirname(glob.glob("/kaggle/input/**/crops.parquet", recursive=True)[0])
+inp = "/content/crops"
+zipfile.ZipFile("/content/crops.zip").extractall(inp)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 m = CLIPModel.from_pretrained("{model}").eval().to(dev); p = CLIPProcessor.from_pretrained("{model}")
 texts = {texts}
@@ -65,8 +66,7 @@ for i in range(0, len(crops), 32):
         pr = m(**p(text=texts, images=imgs, return_tensors="pt", padding=True).to(dev)).logits_per_image.softmax(1).cpu().numpy()
     out += pr[:, :{n_light}].sum(1).tolist()
 crops["p_light"] = out
-os.makedirs("/kaggle/working/out", exist_ok=True)
-crops.to_parquet("/kaggle/working/out/scores.parquet", index=False)
+crops.to_parquet("/content/scores.parquet", index=False)
 print("scored", len(crops))
 """
 
@@ -99,20 +99,19 @@ def cut_crops(drv: dict, L: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
 
 
 def score(drv: dict, crops: pd.DataFrame) -> pd.Series:
-    """P(traffic light) per landmark (median over its crops), CLIP on Kaggle."""
-    from src.video import kaggle_run
+    """P(traffic light) per landmark (median over its crops), CLIP on a GPU service (gpu.py)."""
+    from src.video import gpu
     import zipfile
     folder = drv["folder"] / "light_check"
-    pack = folder / "crops.zip"                      # one upload instead of hundreds (Kaggle unpacks it)
+    pack = folder / "crops.zip"                      # one upload instead of hundreds
     with zipfile.ZipFile(pack, "w", zipfile.ZIP_STORED) as z:
         for f in list(crops.file) + ["crops.parquet"]:
             z.write(folder / f, f)
-    files = {"crops.zip": pack}
-    ds = kaggle_run.push_dataset(f"chisinau light crops {drv['key']}", files, drv["folder"] / "colab" / "kaggle_crops")
     script = SCORE_JOB.format(model=CLIP, texts=json.dumps(LIGHT + OTHER), n_light=len(LIGHT))
-    out = kaggle_run.run_kernel(f"chisinau light check {drv['key']}", script, [ds], folder / "kaggle_out",
-                                drv["folder"] / "colab" / "kaggle_kernel_lights")
-    s = pd.read_parquet(out / "out" / "scores.parquet")
+    out = folder / "scores.parquet"
+    gpu.run_job(f"light check {drv['key']}", script, {"/content/crops.zip": pack}, {"/content/scores.parquet": out},
+                folder / "gpu", pip=["transformers==4.46.3"])
+    s = pd.read_parquet(out)
     return s.groupby("mark").p_light.median()
 
 
