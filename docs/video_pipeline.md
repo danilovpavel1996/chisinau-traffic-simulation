@@ -561,3 +561,21 @@ lock it. The out-of-town drive's map part (one straight road) has no profile to 
 Landmark anchors off: the video's crosswalk passings were a median 21–30 m from any OSM crossing at
 the true position, light passings far outnumber signalised junctions (several heads, pedestrian /
 false lights) — both need better detectors before they can pin the position.
+
+### Traffic lights with context, OSM buildings, Kaggle for every GPU step (2026-10-26)
+
+- Light landmarks checked by eye (24 random, 2026_10_24_17_08): only 10 real — the rest road signs
+  (blue, priority diamonds, crosswalk signs), shop signs, lit displays, poles. OSM is incomplete
+  here: 6 signalised junctions mapped on that route, all 6 found by the video, but well-seen real
+  lights stand at many unmapped places — the map can confirm a light, not rule one out.
+- `light_context.py`: each landmark's three largest views scored by CLIP (clip-vit-large-patch14,
+  zero-shot, on Kaggle) against the look-alikes: on the 24, kept 9/10 real and 3/14 false (base
+  model: 7/10 and 4/14). City drive: 147 of 286 landmarks real — 59 ours (facing us, at vehicle
+  height, over / beside our road), 41 other directions, 47 pedestrian; 31 % near an OSM signal.
+  3D view: only real lights, ours full size, others smaller and dim, pedestrian small.
+- Junction events: the signal cue from tracked lights plus every detection of a verified light
+  (all untracked lights made night matching drop 42 → 17 %: street lamps).
+- OSM buildings (69,010; height measured 2 %, from floors 7 %, else by type) drawn translucent in
+  the 3D view along the route.
+- Kaggle runs the Colab jobs unchanged (`kaggle_run.run_job`: inputs to /content paths, outputs
+  collected): perception, scene, dense, points, lights — Colab only as fallback.

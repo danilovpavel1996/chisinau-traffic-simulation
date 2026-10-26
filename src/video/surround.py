@@ -59,6 +59,7 @@ LANE_BORROW_M = 10.0          # a band with no lines takes those of a band this 
 X_RANGE_LANES = 14.0          # lanes inferred out to this far sideways
 LANE_AXIS_DEG = 30.0          # only vehicles this close to our road's direction are put in its lanes
 LANE_PULL = 0.8               # share of the way to the lane's middle a vehicle is moved
+ROLES = {"ours": 0, "other": 1, "pedestrian": 2}   # traffic-light role (light_context.py), 8th value
 LANDMARK_ID = 1_000_000          # ids of traffic-light landmarks (world.py), apart from track ids
 WIDTH_M = {"car": (1.6, 2.1), "bus": (2.4, 2.6), "truck": (2.2, 2.6), "motorcycle": (0.6, 1.0)}
 DEPTH_SYNC_S = 0.26           # use a depth map at most this far from the detection frame
@@ -209,6 +210,11 @@ def objects(drv: dict, geo: Geometry, mapped=None) -> list:
         from src.video import world
         pose = world.Pose(drv)
         marks, light_obs = world.lights(drv, geo, pose)
+        lf = folder / "lights.parquet"                     # light_context.py: real lights only, with their role
+        if lf.exists():
+            lc = pd.read_parquet(lf)
+            marks = marks.merge(lc[["id", "real", "role"]], on="id", how="left")
+            marks = marks[marks.real.fillna(False).astype(bool)].reset_index(drop=True)
     out = []
     boxes: dict[int, tuple] = {}                              # vehicle row → its detection box (headings)
     bar = progress(det.frame.nunique(), "surround objects")
@@ -252,7 +258,8 @@ def objects(drv: dict, geo: Geometry, mapped=None) -> list:
                     if -15 < z_ < 90 and abs(x_) < 40:
                         rows.append([LANDMARK_ID + int(m.id), KINDS.index("traffic_light"), round(float(x_), 2),
                                      round(float(z_), 2), 0.4, round(m.y, 2),
-                                     LIGHTS.get(world.light_colour(light_obs, m.id, t), 0)])
+                                     LIGHTS.get(world.light_colour(light_obs, m.id, t), 0),
+                                     ROLES.get(getattr(m, "role", "ours"), 0)])
         out.append([round(float(t), 2), rows])
         bar.update(1)
     bar.close()

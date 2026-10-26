@@ -144,6 +144,40 @@ def input_height(drv: dict) -> int:
     return int(WIDTH * int(meta["height"] * (1 - drv["camera"]["hood"] + 0.03)) / meta["width"])
 
 
+def run_kaggle(drv: dict):
+    from src.video import kaggle_run
+    folder = drv["folder"]
+    script = remote_script(drv)
+    up = {"/content/input.mp4": input_video(drv)}
+    if (folder / "detections.parquet").exists():
+        up["/content/detections.parquet"] = folder / "detections.parquet"
+    t0 = time.time()
+    kaggle_run.run_job(f"dense {drv['key']}", script, up,
+                       {"/content/scene_dense.parquet": folder / "scene_dense.parquet",
+                        "/content/depth.parquet": folder / "depth.parquet",
+                        "/content/motion.parquet": folder / "motion_dense.parquet"},
+                       folder / "colab" / "kaggle_dense", pip=["transformers==4.46.3"])
+    n = len(pd.read_parquet(folder / "scene_dense.parquet"))
+    print(f"→ {folder}/scene_dense.parquet, depth.parquet: {n} frames, Kaggle {(time.time() - t0) / 60:.1f} min", flush=True)
+
+
+def run_remote(drv: dict):
+    """Kaggle first, Colab if Kaggle fails (no quota, outage)."""
+    try:
+        run_kaggle(drv)
+    except Exception as e:
+        print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+        run_colab(drv)
+
+
+def remote_script(drv: dict) -> str:
+    folder = drv["folder"]
+    return REMOTE.format(classes=json.dumps(CLASSES), codes=repr(CODES), step=DENSE_STEP, top=DENSE_TOP, down=DOWN,
+                         frame_step=FRAME_STEP, img_h=input_height(drv), pairs=FLOW_PAIRS,
+                         k=WIDTH / json.loads((folder / "meta.json").read_text())["width"],
+                         describe=inspect.getsource(describe_dense), seg=SEG_MODEL, depth=DEPTH_MODEL)
+
+
 def run_colab(drv: dict, reuse: bool = False, collect: bool = False):
     from src.video.colab import Session
     folder, key = drv["folder"], drv["key"]
@@ -178,8 +212,17 @@ def main():
     ap.add_argument("drive", help="drive key in configs/drives.yaml")
     ap.add_argument("--reuse", action="store_true", help="attach to the drive's runtime if still alive")
     ap.add_argument("--collect", action="store_true", help="only download the results of a job that finished")
+    ap.add_argument("--colab", action="store_true", help="on Colab (default: Kaggle first, Colab if Kaggle fails)")
     a = ap.parse_args()
-    run_colab(drives.load(a.drive), a.reuse, a.collect)
+    drv = drives.load(a.drive)
+    if a.colab or a.reuse or a.collect:
+        run_colab(drv, a.reuse, a.collect)
+    else:
+        try:
+            run_kaggle(drv)
+        except Exception as e:                       # no quota / Kaggle down: Colab
+            print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+            run_colab(drv)
 
 
 if __name__ == "__main__":

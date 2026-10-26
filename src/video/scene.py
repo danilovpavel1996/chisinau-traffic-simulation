@@ -371,6 +371,30 @@ def run_colab(drv: dict, dense: bool = False):
     print(f"Colab segmentation done in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
+def run_kaggle(drv: dict):
+    """The same segmentation job on a Kaggle T4 (kaggle_run.run_job): the frame zip as one part."""
+    from src.video import kaggle_run
+    out = drv["folder"] / "colab"
+    zpath = out / f"{drv['key']}_frames.zip"
+    if not zpath.exists():
+        export_colab(drv, False)
+    result = out / "scene.colab.parquet"
+    t0 = time.time()
+    kaggle_run.run_job(f"scene {drv['key']}", remote_script(remote_code(False)), {"/content/part_0000": zpath},
+                       {"/content/scene.parquet": result}, out / "kaggle_scene", pip=["transformers==4.46.3"])
+    import_colab(drv, result)
+    print(f"Kaggle segmentation done in {(time.time() - t0) / 60:.1f} min", flush=True)
+
+
+def run_remote(drv: dict):
+    """Kaggle first, Colab if Kaggle fails (no quota, outage)."""
+    try:
+        run_kaggle(drv)
+    except Exception as e:
+        print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+        run_colab(drv)
+
+
 def import_colab(drv: dict, path: Path):
     df = pd.read_parquet(path)
     need = {"t", "crosswalk", "crosswalk_bottom", "guard_rail", "scanlines"}

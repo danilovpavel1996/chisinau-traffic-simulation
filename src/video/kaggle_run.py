@@ -75,10 +75,15 @@ def push_dataset(name: str, files: dict[str, Path], stage: Path, reuse_if: list[
     size = sum(p.stat().st_size for p in files.values()) / 1e6
     exists = kaggle("datasets", "status", ds, check=False).strip().lower().endswith("ready")
     print(f"uploading {len(files)} files ({size:.0f} MB) to the Kaggle dataset {ds} ({'new version' if exists else 'new'})…", flush=True)
-    if exists:
-        kaggle("datasets", "version", "-p", str(stage), "-m", time.strftime("%Y-%m-%d %H:%M"), "-r", "skip", capture=False)
-    else:
-        kaggle("datasets", "create", "-p", str(stage), "-r", "skip", capture=False)
+    try:
+        if exists:
+            kaggle("datasets", "version", "-p", str(stage), "-m", time.strftime("%Y-%m-%d %H:%M"), "-r", "skip", capture=False)
+        else:
+            kaggle("datasets", "create", "-p", str(stage), "-r", "skip", capture=False)
+    except RuntimeError:                                  # the CLI reported failure after 858 uploads although
+        time.sleep(30)                                    # the dataset was created: trust Kaggle's own status
+        if not kaggle("datasets", "status", ds, check=False).strip().lower().endswith("ready"):
+            raise
     for _ in range(120):                                  # Kaggle processes the upload before kernels can mount it
         if kaggle("datasets", "status", ds, check=False).strip().lower().endswith("ready"):
             break
@@ -117,3 +122,44 @@ def run_kernel(name: str, script: str, datasets: list[str], out_dir: Path, stage
         raise RuntimeError(f"Kaggle kernel {kid} ended: {st}" + (f"\n{log.read_text()[-3000:]}" if log else ""))
     shutil.rmtree(stage, ignore_errors=True)
     return out_dir
+
+
+# ── any remote script: the Colab jobs unchanged, on Kaggle ─────────────────
+JOB_HEAD = """
+import glob, json, os, shutil, subprocess, sys
+UP, DOWN, PIP = {up}, {down}, {pip}
+inp = os.path.dirname(glob.glob("/kaggle/input/**/" + next(iter(UP.values())), recursive=True)[0])
+for remote, name in UP.items():                       # each input where the script expects it
+    os.makedirs(os.path.dirname(remote), exist_ok=True)
+    shutil.copy(os.path.join(inp, name), remote)
+if PIP:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *PIP], check=True)
+os.chdir("/content")
+"""
+JOB_TAIL = """
+os.makedirs("/kaggle/working/out", exist_ok=True)
+for remote, name in DOWN.items():
+    shutil.copy(remote, os.path.join("/kaggle/working/out", name))
+print("job done", flush=True)
+"""
+
+
+def quota_left_h() -> float:
+    out = kaggle("quota", check=False)
+    m = re.search(r"GPU\s+\S+h\s+([\d.]+)h", out)
+    return float(m.group(1)) if m else 0.0
+
+
+def run_job(name: str, script: str, uploads: dict[str, Path], downloads: dict[str, Path], work: Path,
+            pip: list[str] | None = None) -> None:
+    """Run a remote script written for Colab (/content paths) on a Kaggle T4: uploads {remote path:
+    local file} become a private dataset, the outputs {remote path: local file} are downloaded."""
+    work.mkdir(parents=True, exist_ok=True)
+    up_names = {r: f"in{i}_{Path(r).name}.bin" for i, r in enumerate(uploads)}   # .bin: Kaggle must not unpack zips
+    down_names = {r: f"out{i}_{Path(r).name}" for i, r in enumerate(downloads)}
+    ds = push_dataset(f"chisinau {name}", {up_names[r]: p for r, p in uploads.items()}, work / "dataset",
+                      reuse_if=list(up_names.values()))
+    job = JOB_HEAD.format(up=json.dumps(up_names), down=json.dumps(down_names), pip=json.dumps(pip or [])) + script + JOB_TAIL
+    out = run_kernel(f"chisinau {name}", job, [ds], work / "out", work / "kernel")
+    for r, local in downloads.items():
+        shutil.move(str(out / "out" / down_names[r]), local)

@@ -636,7 +636,16 @@ def layer(drv: dict, mp: pd.DataFrame, li: LaneIndex) -> dict:
     tl = [np.round(np.column_stack([np.array(json.loads(sh))[:, 0] - E0, -(np.array(json.loads(sh))[:, 1] - N0)]), 2).ravel().tolist()
           for sh in j[near]["shape"]]
     pose = np.column_stack([mp.t, mp.E - E0, mp.N - N0, mp.heading])[::1]
-    return dict(lanes=edges, tl_junctions=tl, pose=np.round(pose, 2).tolist())
+    houses = []
+    bf = OUT / "buildings.parquet"
+    if bf.exists():                                                  # OSM buildings near the route
+        from scipy.spatial import cKDTree
+        b = pd.read_parquet(bf)
+        dist, _ = cKDTree(li.pts[::5]).query(b[["cx", "cy"]].to_numpy())
+        for r in b[dist < LAYER_M].itertuples():
+            q = np.array(json.loads(r.shape))
+            houses.append([r.height, np.round(np.column_stack([q[:, 0] - E0, q[:, 1] - N0]), 1).ravel().tolist()])
+    return dict(lanes=edges, tl_junctions=tl, buildings=houses, pose=np.round(pose, 2).tolist())
 
 
 def build(drv: dict, full: bool = False):
@@ -702,13 +711,76 @@ def evaluate(drv: dict, mp: pd.DataFrame) -> dict:
                 matcher_within_10m=f"{np.mean(e0 < 10):.0%}", matcher_within_30m=f"{np.mean(e0 < 30):.0%}")
 
 
+# ── buildings (OpenStreetMap) ────────────────────────────────────────────────
+OSM_FULL = ROOT / "data" / "osm" / "chisinau_full.osm"
+LEVEL_M = 3.0                # metres per floor (building:levels)
+DEFAULT_H = {"house": 6.0, "detached": 6.0, "garage": 3.0, "garages": 3.0, "shed": 3.0, "kiosk": 3.0,
+             "apartments": 15.0, "residential": 9.0, "commercial": 9.0, "retail": 6.0, "industrial": 8.0,
+             "church": 12.0, "school": 12.0}
+DEFAULT_OTHER_H = 9.0
+
+
+def extract_buildings():
+    """OSM building outlines (UTM) with a height: height=*, else building:levels × 3 m, else a default by
+    type — buildings.parquet (69k in Chișinău; 2.7k with a height, 6.3k with floors)."""
+    ways, need = [], set()
+    for ev, el in ET.iterparse(OSM_FULL, events=("end",)):
+        if el.tag == "way":
+            tags = {t.get("k"): t.get("v") for t in el.findall("tag")}
+            if "building" in tags:
+                refs = [int(n.get("ref")) for n in el.findall("nd")]
+                if len(refs) >= 4:
+                    ways.append((int(el.get("id")), refs, tags))
+                    need.update(refs)
+            el.clear()
+        elif el.tag in ("node", "relation"):
+            if el.tag == "relation":
+                el.clear()
+    coords = {}
+    for ev, el in ET.iterparse(OSM_FULL, events=("end",)):
+        if el.tag == "node":
+            i = int(el.get("id"))
+            if i in need:
+                coords[i] = (float(el.get("lon")), float(el.get("lat")))
+            el.clear()
+        elif el.tag in ("way", "relation"):
+            el.clear()
+    to = utm()
+    rows = []
+    for wid, refs, tags in ways:
+        pts = [coords[r] for r in refs if r in coords]
+        if len(pts) < 4:
+            continue
+        e, n = to.transform([p[0] for p in pts], [p[1] for p in pts])
+        h, src = None, "default"
+        try:
+            if "height" in tags:
+                h, src = float(tags["height"].split()[0].replace(",", ".")), "height"
+            elif "building:levels" in tags:
+                h, src = float(tags["building:levels"].replace(",", ".")) * LEVEL_M, "levels"
+        except ValueError:
+            pass
+        if h is None or not 2 <= h <= 200:
+            h, src = DEFAULT_H.get(tags["building"], DEFAULT_OTHER_H), "default"
+        rows.append(dict(id=wid, kind=tags["building"], height=round(h, 1), height_source=src,
+                         cx=float(np.mean(e)), cy=float(np.mean(n)),
+                         shape=json.dumps(np.round(np.column_stack([e, n]), 1).tolist())))
+    df = pd.DataFrame(rows)
+    df.to_parquet(OUT / "buildings.parquet", index=False)
+    print(f"→ {OUT / 'buildings.parquet'}: {len(df)} buildings; height from height=* {np.mean(df.height_source == 'height'):.0%}, "
+          f"floors {np.mean(df.height_source == 'levels'):.0%}, default {np.mean(df.height_source == 'default'):.0%}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("drive", nargs="?", help="drive key in configs/drives.yaml")
     ap.add_argument("--extract", action="store_true", help="network.net.xml → parquet tables (once)")
+    ap.add_argument("--buildings", action="store_true", help="OSM buildings → buildings.parquet (once)")
     a = ap.parse_args()
     if a.extract:
         extract()
+    if a.buildings:
+        extract_buildings()
     if a.drive:
         drv = drives.load(a.drive)
         lay = build(drv)

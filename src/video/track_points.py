@@ -136,6 +136,24 @@ print("done", len(rows), "frame pairs", flush=True)
 """
 
 
+def run_kaggle(drv: dict):
+    import inspect
+    import tempfile
+    from src.video import kaggle_run
+    boxes, img_h, bonnet = inputs(drv)
+    script = REMOTE.format(grid=GRID, per_cell=PER_CELL, fb=FB_MAX_PX, step=FRAME_STEP, img_h=img_h, bonnet=bonnet,
+                           corners=inspect.getsource(corners), track=inspect.getsource(track))
+    work = drv["folder"] / "colab" / "kaggle_points"
+    work.mkdir(parents=True, exist_ok=True)
+    bj = work / "boxes.json"
+    bj.write_text(json.dumps(boxes))
+    t0 = time.time()
+    kaggle_run.run_job(f"points {drv['key']}", script, {"/content/input.mp4": input_video(drv), "/content/boxes.json": bj},
+                       {"/content/motion.parquet": drv["folder"] / "motion.parquet"}, work)
+    m = pd.read_parquet(drv["folder"] / "motion.parquet")
+    print(f"→ {drv['folder'] / 'motion.parquet'}: {len(m)} frame pairs; Kaggle {(time.time() - t0) / 60:.1f} min", flush=True)
+
+
 def run_colab(drv: dict, reuse: bool = False):
     """The whole drive on a Colab CPU runtime (~2 cores: slower than the laptop, but detached)."""
     import inspect
@@ -167,9 +185,12 @@ def main():
     ap.add_argument("--seconds", type=float, help="only N seconds (test → motion_test.parquet)")
     ap.add_argument("--start", type=float, default=0.0, help="with --seconds: from this second")
     ap.add_argument("--colab", action="store_true", help="the whole drive on a Colab CPU runtime")
+    ap.add_argument("--kaggle", action="store_true", help="the whole drive on Kaggle")
     ap.add_argument("--reuse", action="store_true", help="with --colab: attach to the runtime if still alive")
     a = ap.parse_args()
-    if a.colab:
+    if a.kaggle:
+        run_kaggle(drives.load(a.drive))
+    elif a.colab:
         run_colab(drives.load(a.drive), a.reuse)
     else:
         run(drives.load(a.drive), a.seconds, a.start)

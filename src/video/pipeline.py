@@ -36,7 +36,7 @@ import time
 
 from src.video import drives
 
-STEPS = ["overlay", "perception", "bonnet", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "speed", "bev", "surround", "position", "lanes", "signs",
+STEPS = ["overlay", "perception", "bonnet", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "points", "speed", "bev", "surround", "position", "lanes", "signs",
          "streets", "dashboard"]
 
 
@@ -46,7 +46,7 @@ def run_step(step: str, drv: dict):
         overlay.run(drv)
     elif step == "perception":                # > 5 min on the laptop → free Colab GPU
         from src.video import perception
-        perception.run_colab(drv)
+        perception.run_remote(drv)          # Kaggle, else Colab
     elif step == "bonnet":                    # where our own car is in the picture; its boxes dropped
         from src.video import bonnet
         bonnet.run(drv)
@@ -55,16 +55,23 @@ def run_step(step: str, drv: dict):
         traffic.run(drv)
     elif step == "scene":                     # > 5 min on the laptop → free Colab GPU
         from src.video import scene
-        scene.run_colab(drv)
+        scene.run_remote(drv)               # Kaggle, else Colab
     elif step == "dense":                     # > 5 min on the laptop → free Colab GPU
         from src.video import dense
-        dense.run_colab(drv)
+        dense.run_remote(drv)               # Kaggle, else Colab
     elif step == "lens":
         from src.video import lens
         lens.run_colab(drv)
     elif step == "calibrate":
         from src.video import calibrate
         calibrate.run(drv)
+    elif step == "points":                    # scene points through every frame pair (speed.py): Kaggle
+        from src.video import track_points
+        try:
+            track_points.run_kaggle(drv)
+        except Exception as e:
+            print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+            track_points.run_colab(drv)
     elif step == "speed":                     # needs track_points.py's motion.parquet (Colab CPU)
         from src.video import speed
         if (drv["folder"] / "motion.parquet").exists():

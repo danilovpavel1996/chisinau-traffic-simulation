@@ -77,7 +77,17 @@ def cue_list(drv: dict) -> pd.DataFrame:
     for t in crossing_events(folder):
         cues.append(dict(t=float(t), kind="crosswalk"))
     det = pd.read_parquet(folder / "detections.parquet")
-    tl = det[(det.cls == "traffic_light") & ((det.y2 - det.y1) > SIGNAL_NEAR * meta["height"])].sort_values("t")
+    # tracked lights only: since perception keeps every confident light (and adds tiled ones) for the
+    # landmarks, untracked detections include street lamps at night (19_26: junctions 42 → 17 %)
+    lights = det.cls == "traffic_light"
+    keep = det.track_id >= 0
+    lo, lc = folder / "light_obs.parquet", folder / "lights.parquet"
+    if lo.exists() and lc.exists():                  # … plus every detection of a light verified as real (light_context)
+        real = set(pd.read_parquet(lc).query("real").id)
+        ob = pd.read_parquet(lo)
+        ok = set(map(tuple, ob[ob.mark.isin(real)][["t", "conf"]].round(4).to_numpy()))
+        keep = keep | pd.Series([(round(a, 4), round(b, 4)) in ok for a, b in zip(det.t, det.conf)], index=det.index)
+    tl = det[lights & keep & ((det.y2 - det.y1) > SIGNAL_NEAR * meta["height"])].sort_values("t")
     if len(tl):
         grp = (tl.t.diff() > 4).cumsum()                     # one cluster per light we drive up to
         for _, g in tl.groupby(grp):

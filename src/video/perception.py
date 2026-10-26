@@ -592,6 +592,15 @@ def run_kaggle(drv: dict, detector: str = "rtdetr2", reid: bool = True):
     print(f"Kaggle perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
 
 
+def run_remote(drv: dict, detector: str = "rtdetr2", reid: bool = True):
+    """Kaggle first, Colab if Kaggle fails (no quota, outage)."""
+    try:
+        run_kaggle(drv, detector, reid)
+    except Exception as e:
+        print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+        run_colab(drv, detector, reid)
+
+
 def join_chunks(drv: dict, n_chunks: int, fps: float, detector: str):
     folder = drv["folder"]
     parts = folder / "colab" / "chunks"

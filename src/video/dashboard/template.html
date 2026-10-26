@@ -111,6 +111,7 @@
       <span><span class="sw" style="background:#ff3b30;border-radius:50%"></span><span class="sw" style="background:#34c759;border-radius:50%"></span>traffic light</span>
       <span><span class="sw" style="background:#6fa8ff"></span>map lanes</span>
       <span><span class="sw" style="background:#ffb020"></span>signalised junction (map)</span>
+      <span><span class="sw" style="background:#8d96a3"></span>buildings (map)</span>
       <span>drag to look around · scroll to zoom</span>
     </div>
     <div class="bevlegend legendplan">
@@ -223,6 +224,15 @@ function surroundView(D) {
       const q = []; for (let i = 0; i + 1 < p.length; i += 2) q.push(new THREE.Vector3(p[i], 0.06, p[i + 1]));
       mapInner.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(q), new THREE.LineBasicMaterial({ color: 0xffb020 })));
     }
+    // OSM buildings (height from the map: height / floors × 3 m / a default by type), translucent
+    const houseMat = new THREE.MeshStandardMaterial({ color: 0x8d96a3, transparent: true, opacity: 0.38, roughness: 0.9, depthWrite: false });
+    for (const [h, p] of (M.buildings || [])) {
+      const sh = new THREE.Shape(); sh.moveTo(p[0], p[1]);
+      for (let i = 2; i + 1 < p.length; i += 2) sh.lineTo(p[i], p[i + 1]);
+      const mesh = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: h, bevelEnabled: false }), houseMat);
+      mesh.rotation.x = -Math.PI / 2;                     // shape (east, north) up by h → x = east, z = −north
+      mapInner.add(mesh);
+    }
     MP = M.pose; MPT = MP.map(p => p[0]);
   }
   const placeMap = t => {
@@ -260,6 +270,10 @@ function surroundView(D) {
       if (!m) { m = o[1] === 4 ? lightMesh() : vehicle(o[1], o[6] === 1); pool.set(key, m); scene.add(m); }
       if (o[1] === 4) {
         m.position.set(X, o[5], -Z); m.userData.lamp.material.color.setHex(LAMP[o[6]]);
+        // role (light_context.py): ours full size; other directions smaller and dim; pedestrian small
+        const role = o.length > 7 ? o[7] : 0, sc = [1, 0.7, 0.55][role];
+        m.children[0].scale.setScalar(sc); m.userData.lamp.scale.setScalar(sc);
+        m.userData.lamp.material.transparent = role === 1; m.userData.lamp.material.opacity = role === 1 ? 0.45 : 1;
         const ph = Math.max(0.1, o[5] - 0.5); m.userData.pole.scale.y = ph; m.userData.pole.position.y = -0.5 - ph / 2;
       } else {
         // heading from the vehicle's own track (surround.py), 0 = our direction, + = to the right;
