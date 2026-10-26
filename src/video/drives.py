@@ -71,7 +71,14 @@ def gps_track(drv: dict):
     if not f.exists():
         return None
     g = pd.read_parquet(f)
-    return g[~g.bad].sort_values("video_s").reset_index(drop=True)
+    g = g[~g.bad].sort_values("video_s").reset_index(drop=True)
+    # the dashcam writes each GPS reading 1–2.6 s after the moment it describes (gps_lag_s, measured by
+    # speed.gps_lag from the video's own speed): shift the readings back to their moment
+    cal = drv["folder"] / "calibration.json"
+    lag = json.loads(cal.read_text()).get("gps_lag_s", 0.0) if cal.exists() else 0.0
+    if lag:
+        g["video_s"] = g.video_s - lag
+    return g
 
 
 def clock(drv: dict, video_s):

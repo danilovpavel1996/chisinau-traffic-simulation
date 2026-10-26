@@ -243,8 +243,31 @@ def scale(drv: dict, df: pd.DataFrame) -> tuple[float, str]:
     return 1.0, "none (metric from depth)"
 
 
+LAG_RANGE_S = (-1.0, 4.0)
+
+
+def gps_lag(drv: dict, df: pd.DataFrame) -> float:
+    """How late the overlay's GPS is: the shift at which its speed best matches the video's own speed
+    (2026-10: 1.0–2.6 s on all four drives). Only for the answer key and the speed scale."""
+    f = drv["folder"] / "gps.parquet"
+    if not f.exists():
+        return 0.0
+    g = pd.read_parquet(f)
+    g = g[~g.bad].sort_values("video_s")
+    s = df.dropna(subset=["kmh_raw"])
+    ts = np.arange(s.t.min() + 10, s.t.max() - 10, 0.2)
+    v = np.interp(ts, s.t, s.kmh_raw)
+    lags = np.arange(LAG_RANGE_S[0], LAG_RANGE_S[1] + 1e-6, 0.2)
+    corr = [np.corrcoef(v, np.interp(ts + lag, g.video_s, g.speed_kmh))[0, 1] for lag in lags]
+    return round(float(lags[int(np.argmax(corr))]), 1)
+
+
 def run(drv: dict) -> pd.DataFrame:
     df = raw_speed(drv)
+    cal = drv["folder"] / "calibration.json"
+    c = json.loads(cal.read_text()) if cal.exists() else {}
+    c["gps_lag_s"] = gps_lag(drv, df)                      # before the scale: it compares with GPS speed
+    cal.write_text(json.dumps(c, indent=2))
     k, source = scale(drv, df)
     df["kmh"] = df.kmh_raw * k
     df.to_parquet(drv["folder"] / "speed.parquet", index=False)

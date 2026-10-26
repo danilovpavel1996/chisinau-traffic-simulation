@@ -665,13 +665,17 @@ def mapillary_pins(drv: dict, mp: pd.DataFrame, pose, route: np.ndarray, cum: np
 # ── photo pins (vpr.py) ─────────────────────────────────────────────────────
 USE_VPR = True
 VPR_EVERY_S = 10.0           # one pin per this many seconds: the median of the confident photo matches
+VPR_INLIERS = 100          # verified photo positions with this many consistent point matches (9 m median, 10_06)
 VPR_MIN = 3                  # … if at least this many in the stretch
 
 
 def vpr_pins(mp: pd.DataFrame, v: pd.DataFrame, route: np.ndarray, cum: np.ndarray) -> tuple[pd.DataFrame, int]:
     """Pin how far along the route we are on the photo alignment (confident frames, a robust median
     per VPR_EVERY_S); between pins the estimate's own course (odometer), shifted to fit."""
-    c = v[v.confident]
+    if "inliers" in v and (v.inliers >= VPR_INLIERS).sum() >= VPR_MIN:   # verified by point matching (vpr.verify)
+        c = v[v.inliers >= VPR_INLIERS].assign(d=lambda x: x.d_photo)
+    else:
+        c = v[v.confident]
     pins = []
     for t0 in np.arange(c.t.min() if len(c) else 0, (c.t.max() if len(c) else 0) + VPR_EVERY_S, VPR_EVERY_S):
         w = c[(c.t >= t0) & (c.t < t0 + VPR_EVERY_S)]

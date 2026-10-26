@@ -257,6 +257,87 @@ def align(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame, P: dict, Fv: di
                              confident=z_on >= CONF_Z))
 
 
+# ── geometric verification (SuperPoint + LightGlue, RANSAC) ────────────────
+TOP_K = 5                    # candidate photos per frame (most similar fingerprints) …
+VERIFY_M = 120.0             # … within this of the photo alignment's position
+MIN_INLIERS = 40             # a frame-photo pair with at least this many consistent point matches is the same place
+
+VERIFY_JOB = """
+import json, os, subprocess, sys, zipfile, numpy as np, pandas as pd, torch, cv2
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "git+https://github.com/cvg/LightGlue.git"], check=True)
+from lightglue import LightGlue, SuperPoint
+from lightglue.utils import load_image, rbd
+zipfile.ZipFile("/content/photos.zip").extractall("/content/photos")
+zipfile.ZipFile("/content/frames.zip").extractall("/content/frames")
+pairs = pd.read_parquet("/content/pairs.parquet")
+dev = "cuda" if torch.cuda.is_available() else "cpu"
+ext = SuperPoint(max_num_keypoints=1024).eval().to(dev)
+mat = LightGlue(features="superpoint").eval().to(dev)
+cache = {{}}
+def feats(path):
+    if path not in cache:
+        with torch.no_grad():
+            cache[path] = ext.extract(load_image(path).to(dev))
+        if len(cache) > 4000:
+            cache.pop(next(iter(cache)))
+    return cache[path]
+inl = []
+for i, r in enumerate(pairs.itertuples()):
+    a, b = feats("/content/frames/" + r.frame), feats("/content/photos/" + r.photo)
+    with torch.no_grad():
+        m = rbd(mat({{"image0": a, "image1": b}}))
+    k = m["matches"].cpu().numpy()
+    n = 0
+    if len(k) >= 8:
+        p0 = rbd(a)["keypoints"].cpu().numpy()[k[:, 0]]; p1 = rbd(b)["keypoints"].cpu().numpy()[k[:, 1]]
+        F, mask = cv2.findFundamentalMat(p0, p1, cv2.USAC_MAGSAC, 1.5, 0.999, 10000)
+        n = int(mask.sum()) if mask is not None else 0
+    inl.append(n)
+    if (i + 1) % 500 == 0:
+        print(i + 1, "pairs", flush=True)
+pairs["inliers"] = inl
+pairs.to_parquet("/content/verified.parquet", index=False)
+print("done", len(pairs), flush=True)
+"""
+
+
+def verify(drv: dict, photos: pd.DataFrame, frames: pd.DataFrame, P: dict, Fv: dict, out: pd.DataFrame) -> pd.DataFrame:
+    """Per frame, the TOP_K most similar photos near the aligned position, checked by point matching
+    on Kaggle; returns the pairs with their inlier counts."""
+    from src.video import kaggle_run
+    work = drv["folder"] / "vpr"
+    vf = work / "verified.parquet"
+    if vf.exists():
+        return pd.read_parquet(vf)
+    pv = np.stack([P[f"{i}.jpg"] for i in photos.id])
+    pd_ = photos.d.to_numpy()
+    rows = []
+    for r in out.itertuples():
+        f = frames.file[frames.t == r.t]
+        if not len(f) or f.iat[0] not in Fv:
+            continue
+        near = np.flatnonzero(np.abs(pd_ - r.d) <= VERIFY_M)
+        if not len(near):
+            continue
+        sim = pv[near] @ Fv[f.iat[0]]
+        for j in near[np.argsort(-sim)[:TOP_K]]:
+            rows.append(dict(t=r.t, frame=f.iat[0], photo=f"{photos.id.iat[j]}.jpg", d=float(pd_[j]), sim=float(pv[j] @ Fv[f.iat[0]])))
+    pairs = pd.DataFrame(rows)
+    pf = work / "pairs.parquet"
+    pairs.to_parquet(pf, index=False)
+    kaggle_run.run_job(f"verify {drv['key']}", VERIFY_JOB.format(),
+                       {"/content/photos.zip": work / "photos.zip", "/content/frames.zip": work / "frames.zip",
+                        "/content/pairs.parquet": pf},
+                       {"/content/verified.parquet": vf}, work / "kaggle_verify")
+    return pd.read_parquet(vf)
+
+
+def verified_positions(pairs: pd.DataFrame) -> pd.DataFrame:
+    """Per frame, the photo with the most consistent point matches, if it has at least MIN_INLIERS."""
+    best = pairs.sort_values("inliers", ascending=False).groupby("t").head(1).sort_values("t")
+    return best[best.inliers >= MIN_INLIERS].rename(columns={"d": "d_photo"}).reset_index(drop=True)
+
+
 def run(drv: dict) -> pd.DataFrame:
     from src.video import map_layer
     photos = fetch_photos(drv)
@@ -264,6 +345,9 @@ def run(drv: dict) -> pd.DataFrame:
     P, Fv = prints(drv, photos, frames)
     prior = map_layer.pose_on_map(drv)
     out = align(drv, photos, frames, P, Fv, prior)
+    ver = verified_positions(verify(drv, photos, frames, P, Fv, out))
+    out = out.merge(ver[["t", "d_photo", "inliers"]], on="t", how="left")
+    out["verified"] = out.d_photo.notna()
     out.to_parquet(drv["folder"] / "vpr.parquet", index=False)
     msg = f"→ {drv['folder'] / 'vpr.parquet'}: {len(out)} frames, {out.confident.mean():.0%} confident"
     if drives.gps_track(drv) is not None:
@@ -285,8 +369,13 @@ def evaluate(drv: dict, out: pd.DataFrame, prior: pd.DataFrame) -> str:
     e_v = np.abs(out.d - true)
     e_p = np.abs(np.interp(out.t, prior.t, prior.d) - true)
     c = out.confident.to_numpy()
-    return (f"along the route: photos median {np.median(e_v):.0f} m (≤10 m {np.mean(e_v <= 10):.0%}), "
-            f"confident ones {np.median(e_v[c]) if c.any() else float('nan'):.0f} m; prior {np.median(e_p):.0f} m (≤10 m {np.mean(e_p <= 10):.0%})")
+    msg = (f"along the route: photos median {np.median(e_v):.0f} m (≤10 m {np.mean(e_v <= 10):.0%}), "
+           f"confident ones {np.median(e_v[c]) if c.any() else float('nan'):.0f} m; prior {np.median(e_p):.0f} m (≤10 m {np.mean(e_p <= 10):.0%})")
+    if "verified" in out and out.verified.any():
+        v = out.verified.to_numpy()
+        e_g = np.abs(out.d_photo.to_numpy()[v] - true[v])
+        msg += f"; verified photos ({v.mean():.0%} of frames) {np.median(e_g):.0f} m (≤10 m {np.mean(e_g <= 10):.0%})"
+    return msg
 
 
 def main():

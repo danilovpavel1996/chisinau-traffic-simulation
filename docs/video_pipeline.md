@@ -615,3 +615,12 @@ error 16 → 12 m — every GPS score so far includes ~10 m of this at city spee
 Error left varies by stretch (+26 m at 3:00, +32 m at 9:00, ~0 elsewhere): look-alike straight
 roads, or contributors' GPS on some Mapillary sequences. Next: geometric verification with local
 features (relative position between our frame and the photo), more photos per bin.
+
+**Geometric verification + GPS lag (2026-10-26).** Per frame the 5 most similar photos within ±120 m,
+checked on Kaggle with SuperPoint + LightGlue and a RANSAC fundamental matrix. The GPS overlay trails
+the video — measured per drive as the shift where its speed best matches the video's own speed: +1.2,
++2.0, +2.6, +1.0 s (10_06, 19_26, 15_48, 17_08) → `gps_lag_s`, applied in `drives.gps_track` (answer
+key and speed scale only). With that, 10_06: verified photos with ≥ 100 inlier matches (55 % of
+frames) 9 m median, 58 % within 10 m (best of the 5 candidates, an oracle, 8 m — the photos available
+are the limit); map position with these as pins **11.5 m median, 44 % within 10 m, 89 % within 30 m**
+(16.8 m, 23 %, 70 % without).
