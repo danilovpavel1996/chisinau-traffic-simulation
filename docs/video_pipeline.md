@@ -579,3 +579,14 @@ false lights) — both need better detectors before they can pin the position.
   the 3D view along the route.
 - Kaggle runs the Colab jobs unchanged (`kaggle_run.run_job`: inputs to /content paths, outputs
   collected): perception, scene, dense, points, lights — Colab only as fallback.
+
+### Mapillary coverage (2026-10-26, `mapillary.py`)
+
+City route 2026_10_24_17_08 (8.9 km), 30-m corridor: 21,453 street photos, 57 % of the route with
+one within 20 m, newest 2026-10-17, 31 % since 2024; 11,264 detected map features — supports 2,718,
+signs 1,995, traffic signs (typed) 1,685, street lamps 1,446, markings 638, **traffic lights 480**
+(OSM: 14 signals). 83 % of Mapillary's lights lie within 25 m of one of our verified lights; 54 % of
+ours have a Mapillary light near. Much richer than OSM for lights and signs: the map prior for
+lights, typed junction signs, and fixed points to pin our position along the road. Token: the
+owner's, in ~/.mapillary/token (header, never in a URL); data is CC BY-SA — fine for this personal,
+non-commercial project.
