@@ -537,3 +537,27 @@ kept at ~10 s at every rate.
   uploaded and detected in time chunks (one Colab job each, survives a reclaimed GPU).
 - Colab free GPUs were taken back twice mid-job: jobs now per run and clip, downloaded as they
   finish, resumed on rerun; a vanished session fails at once.
+
+### Map layer: SUMO lanes around the car, and where on the map we are (2026-10-26, `map_layer.py`)
+
+The SUMO network (netconvert from OSM) as tables: 121,231 vehicle lanes, 65,985 junctions (265
+with traffic lights); no crossings in it (netconvert was run without them — OSM's 3,124 crossing
+points cover that). To draw it around the car, our position on the map must be right to a few
+metres. Video-only position vs GPS (answer key), median / within 10 m / within 30 m:
+
+| method | 10_06 (day) | 17_08 (city) | 19_26 (night) |
+|---|---|---|---|
+| event_match trace (matched junctions + flow odometer) | 73 m / 7 % / 25 % | 53 m / 8 % / 29 % | 59 m / 8 % / 21 % |
+| metric odometer only, scaled to the route length | 136 m / 1 % / 9 % | 86 m / 4 % / 14 % | 52 m / 14 % / 35 % |
+| our path's shape fitted to the route (rigid, 60-s windows) | 80 m | 40 m | 51 m |
+| turns matched to route corners + odometer between | 68 m | 33 m | 35 m |
+| **heading-profile alignment (DTW of heading change vs metres driven)** | **25 m / 12 % / 61 %** | **28 m / 18 % / 51 %** | 46 m / 14 % / 35 % |
+| + landmark anchors (crosswalk / light passings matched to OSM / SUMO) | 22 m | 47 m | 24 m |
+| + road-surface registration (FFT, seen road vs map lanes) | dropped: from the true position it wandered 7–9 m off, 25 m off it stayed 25 m off | | |
+
+Kept: heading-profile alignment (`pose_on_map` → map_pose.parquet). Not yet good enough to draw
+junction geometry in place (needs ≲ 5 m along the road); sideways the video's own lane lines can
+lock it. The out-of-town drive's map part (one straight road) has no profile to align: 650 m off.
+Landmark anchors off: the video's crosswalk passings were a median 21–30 m from any OSM crossing at
+the true position, light passings far outnumber signalised junctions (several heads, pedestrian /
+false lights) — both need better detectors before they can pin the position.
