@@ -49,9 +49,20 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")[:50]
 
 
-def push_dataset(name: str, files: dict[str, Path], stage: Path) -> str:
-    """Upload files (name → local path) as a private dataset (a new version if it exists); returns its id."""
+def dataset_files(ds: str) -> dict[str, int]:
+    out = kaggle("datasets", "files", ds, "--page-size", "200", check=False)
+    return {p[0]: int(p[1]) for p in (ln.split() for ln in out.splitlines()) if len(p) >= 2 and p[1].isdigit()}
+
+
+def push_dataset(name: str, files: dict[str, Path], stage: Path, reuse_if: list[str] | None = None) -> str:
+    """Upload files (name → local path) as a private dataset (a new version if it exists); returns its id.
+    reuse_if: if the dataset already holds these files at these sizes, no upload (a rerun)."""
     ds = f"{username()}/{slug(name)}"
+    if reuse_if:
+        have = dataset_files(ds)
+        if all(have.get(n) == files[n].stat().st_size for n in reuse_if):
+            print(f"the Kaggle dataset {ds} already holds these files — no upload", flush=True)
+            return ds
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)

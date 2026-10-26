@@ -532,10 +532,12 @@ sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}",
 
 KAGGLE_JOB = """
 import glob, os, shutil, subprocess, sys, time, zipfile
-inp = os.path.dirname(glob.glob("/kaggle/input/**/code.zip", recursive=True)[0])
+inp = os.path.dirname(glob.glob("/kaggle/input/**/chunk_00.mp4", recursive=True)[0])
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "onnxruntime-gpu"], check=True)
 repo, out = "/tmp/repo", "/kaggle/working/out"                    # only out/ is saved as the kernel's output
-zipfile.ZipFile(os.path.join(inp, "code.zip")).extractall(repo)
+# Kaggle unpacks an uploaded zip into a folder of the same name
+code = glob.glob("/kaggle/input/**/code/src/video/perception.py", recursive=True)[0].rsplit("/src/video/", 1)[0]
+shutil.copytree(code, repo)
 os.makedirs(out, exist_ok=True)
 chunks = sorted(glob.glob(os.path.join(inp, "chunk_*.mp4")))
 video = os.path.join(repo, "{video_rel}")
@@ -579,7 +581,8 @@ def run_kaggle(drv: dict, detector: str = "rtdetr2", reid: bool = True):
         code = folder / "colab" / "perception_code.zip"
         code.write_bytes(buf.getvalue())
         files["code.zip"] = code
-        ds = kaggle_run.push_dataset(f"chisinau dashcam {key}", files, folder / "colab" / "kaggle_dataset")
+        ds = kaggle_run.push_dataset(f"chisinau dashcam {key}", files, folder / "colab" / "kaggle_dataset",
+                                     reuse_if=[n for n in files if n.endswith(".mp4")])
         script = KAGGLE_JOB.format(video_rel=drv["video"].relative_to(ROOT), key=key, detector=detector, reid=reid)
         out = kaggle_run.run_kernel(f"chisinau perception {key}", script, [ds], folder / "colab" / "kaggle_out",
                                     folder / "colab" / "kaggle_kernel")
