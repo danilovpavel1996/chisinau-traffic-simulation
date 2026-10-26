@@ -718,3 +718,14 @@ Bd. Mihai Viteazul although it drove in the right one, a car "stuck" on the righ
   city-wide: every drive adds to it.
 - **Frozen cars.** The 3D view stores only moments with detections and kept the last one through gaps:
   a car last seen at 2:09 stood until the next detection at 2:14. Objects older than 0.4 s are hidden.
+
+**Lane counts, second pass (2026-10-27).** Solid vs dashed from single frames (the multi-frame ground
+raster closes a dashed line's gaps): along each line the painted share of 4–24 m ahead — Mircești's
+solid centre line 0.85, the dashed line between the oncoming lanes 0.20. But lines between our own lanes
+read solid near junctions (Mihai Viteazul at 10:11: 0.90), so "first solid line left of the lanes we
+drove" is only a hint. Also dropped: lines < 1.5 m from the kerb or each other (edge lines, double
+readings; 2.3 m dropped Mircești's far lanes, which look 1.9 m wide), outer lanes of mostly parked cars.
+On the 52 OSM-tagged ways measured: lane total 31 → 33–37 %, split 12 → 13–15 % — no real gain. What
+does work is the lanes we drove in, from drives both ways; the map now uses a video count only on ways
+driven both ways (or one-way) with ≥ 2 drives agreeing: Mircești 2 + 1 (towards home + towards the mall)
+and three Petricani ways.

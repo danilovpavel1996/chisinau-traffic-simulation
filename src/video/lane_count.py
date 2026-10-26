@@ -42,6 +42,12 @@ MAX_LANES = 6
 LINE_GAP_M = 0.8             # lane-line readings closer than this are one line
 EDGE_Z = 15.0                # kerbs / edges read within this far ahead
 MIN_S = 5                    # seconds on a way before its count is used
+MIN_LANE_M = 1.5             # no lane is narrower (far lanes look narrow: Mircești 1.9 m; 2.3 dropped them)
+PARK_MIN = 10                # vehicle sightings before an outer lane can be a parking strip …
+PARK_SHARE = 0.7             # … if at least this share of them were parked
+PAINT_Z = (4.0, 24.0)        # painted share of a line measured over this stretch ahead …
+PAINT_S = 0.5                # … in the frames within ± this
+SOLID = 0.6                  # a line painted over at least this share is solid
 MIN_DRIVES = 2               # drives agreeing on a way's lane total before the map uses it
 USED_S = 10                  # seconds in a lane before we count it as one we drove in
 STEP_S = 1.0
@@ -56,6 +62,30 @@ def way_of(edge: str) -> int | None:
         return None
 
 
+def painted(geo, rows: list[dict], xs: list[float]) -> list[float]:
+    """For lines at xs (m, car frame): the share of PAINT_Z ahead that is painted, median over the frames
+    — solid ≈ 0.85, dashed ≈ 0.2 (Mircești at 2:20). Single frames: the ground raster of many frames
+    (lanes_world) closes the gaps of a dashed line."""
+    import zlib
+    from src.video.scene import CODES
+    lm = CODES.index("lane_marking")
+    n_bins = int(PAINT_Z[1] - PAINT_Z[0])
+    cov = [[] for _ in xs]
+    for r in rows:
+        m = np.frombuffer(zlib.decompress(r["mask"]), np.uint8).reshape(json.loads(r["mask_shape"]))
+        rr, cc = np.nonzero(m == lm)
+        xu, yu = geo.undistort((cc + 0.5) * r["step"], r["top"] + (rr + 0.5) * r["step"])
+        ok = yu > geo.y_h + 3
+        Z = geo.fz * geo.h / (yu[ok] - geo.y_h)
+        X = (xu[ok] - geo.cx) * geo.h / (yu[ok] - geo.y_h)
+        for c, x0 in zip(cov, xs):
+            sel = (np.abs(X - x0) < 0.35) & (Z > PAINT_Z[0]) & (Z < PAINT_Z[1])
+            bins = np.zeros(n_bins, bool)
+            bins[np.clip((Z[sel] - PAINT_Z[0]).astype(int), 0, n_bins - 1)] = True
+            c.append(bins.mean())
+    return [float(np.median(c)) if c else np.nan for c in cov]
+
+
 def per_second(drv: dict) -> pd.DataFrame:
     """One row per second: way, forward (our edge's direction), road width, lanes, lanes our way."""
     from src.video import map_layer as M, surround as SR
@@ -68,8 +98,10 @@ def per_second(drv: dict) -> pd.DataFrame:
     lw = pd.read_parquet(folder / "lanes_world.parquet")
     lw = lw[lw.z <= EDGE_Z]
     dense = pd.read_parquet(folder / "scene_dense.parquet").sort_values("t")
+    geo = Geometry(drv, dense.iloc[0])
+    dt = dense.t.to_numpy()
     with contextlib.redirect_stdout(io.StringIO()):
-        frames = SR.objects(drv, Geometry(drv, dense.iloc[0]))          # video only: no map lanes
+        frames = SR.objects(drv, geo)                                   # video only: no map lanes
     light = SR.KINDS.index("traffic_light")
     veh = pd.DataFrame([(t, o[0], o[2], o[3], o[7]) for t, r in frames for o in r
                         if o[1] != light and len(o) > 7 and o[6] != 1],
@@ -80,7 +112,7 @@ def per_second(drv: dict) -> pd.DataFrame:
     lab = veh.tid.map(labels)
     veh["same"] = np.where(lab == "oncoming", False, np.where(lab.isin(["same_dir", "overtook_ego"]), True,
                                                             np.abs((veh.h + 180) % 360 - 180) < 90))
-    veh = veh[lab.fillna("") != "parked"]
+    veh["parked"] = (lab.fillna("") == "parked").to_numpy()
     veh = veh[(veh.Z > 3) & (veh.Z < 40)]
     by_t = {t: g for t, g in lw.groupby("t")}
     lt = np.array(sorted(by_t))
@@ -113,6 +145,13 @@ def per_second(drv: dict) -> pd.DataFrame:
             else:
                 lines[-1].append(x)
         lines = [float(np.median(c)) for c in lines if len(c) >= 2]          # seen in ≥ 2 bands
+        # an edge line next to the kerb, or two readings of one line, makes no lane: Bd. Moscova (3 lanes
+        # a side) read as 4 — keep only lines at least MIN_LANE_M from the kerb and from each other
+        kept = []
+        for x in lines:
+            if xr - x >= MIN_LANE_M and (not kept or kept[-1] - x >= MIN_LANE_M):
+                kept.append(x)
+        lines = [x for x in kept if x - xl >= MIN_LANE_M]
         width = xr - xl
         bounds = [xr] + lines + [xl]
         gaps = -np.diff(bounds)
@@ -129,12 +168,19 @@ def per_second(drv: dict) -> pd.DataFrame:
         lane_of = np.searchsorted(-bounds, -vx) - 1                       # bounds descend
         inside = (lane_of >= 0) & (lane_of < n_l)
         same = v.same.to_numpy(bool)
+        park = v.parked.to_numpy(bool)
+        same, inside = same & ~park, inside
         ours = int(np.searchsorted(-bounds, 0.0) - 1)
         row = dict(t=round(float(t0), 1), edge=edge, way=way, forward=not edge.startswith("-"),
                    width=round(width, 2), lane_w=round(lw_m, 2), lanes=n_l, ours=ours)
+        near = dense.iloc[np.flatnonzero(np.abs(dt - t0) <= PAINT_S)].to_dict("records")
+        share = painted(geo, near, list(bounds[1:-1])) if len(bounds) > 2 else []
+        for i in range(MAX_LANES - 1):                                    # line between lane i and i + 1
+            row[f"paint{i}"] = share[i] if i < len(share) else np.nan
         for i in range(MAX_LANES):                                        # vehicles seen per lane, each way
             row[f"same{i}"] = int(np.sum(same & inside & (lane_of == i)))
-            row[f"on{i}"] = int(np.sum(~same & inside & (lane_of == i)))
+            row[f"on{i}"] = int(np.sum(~same & ~park & inside & (lane_of == i)))
+            row[f"park{i}"] = int(np.sum(park & inside & (lane_of == i)))
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -149,6 +195,27 @@ def summarise(drv: dict, sec: pd.DataFrame) -> pd.DataFrame:
             continue
         total = int(min(np.median(g.lanes), MAX_LANES))
         g = g[g.lanes == total] if (g.lanes == total).sum() >= MIN_S else g
+        # a parking strip along a kerb is no lane: an outer lane holding mostly parked cars over the street
+        # (Studenților, one-way with 1 lane, read as 2–3). Our own lanes never are.
+        park = np.array([g[f"park{i}"].sum() for i in range(total)])
+        moving = np.array([g[f"same{i}"].sum() + g[f"on{i}"].sum() for i in range(total)])
+        drove = {i for i in range(total) if (g.ours == i).sum() >= USED_S}
+        strip = lambda i: i not in drove and park[i] >= PARK_MIN and park[i] > PARK_SHARE * (park[i] + moving[i])
+        lo = 0
+        while lo < total - 1 and strip(lo):
+            lo += 1
+        hi = total
+        while hi - 1 > lo and strip(hi - 1):
+            hi -= 1
+        if lo or hi < total:                                              # renumber from the first real lane
+            g = g.assign(ours=g.ours - lo)
+            for c in ("same", "on", "park"):
+                for i in range(total):
+                    g[f"{c}{i}"] = g[f"{c}{i + lo}"] if i + lo < hi else 0
+            for i in range(total - 1):
+                g[f"paint{i}"] = g[f"paint{i + lo}"] if i + lo < hi - 1 else np.nan
+            total = hi - lo
+        strips = (lo, total and (len(park) - hi))
         used = int(max([i + 1 for i in range(total) if (g.ours == i).sum() >= USED_S] or [1]))
         sm = np.array([g[f"same{i}"].sum() for i in range(total)])
         on = np.array([g[f"on{i}"].sum() for i in range(total)])
@@ -157,11 +224,16 @@ def summarise(drv: dict, sec: pd.DataFrame) -> pd.DataFrame:
             if i >= used and on[i] > sm[i]:
                 break
             k_cars = i + 1
+        # the direction divider: the first line left of the lanes we drove that is solid along the street
+        paint = np.array([g[f"paint{i}"].median() for i in range(total - 1)])
+        k_line = next((i + 1 for i in range(used - 1, total - 1) if paint[i] >= SOLID), None)
         out.append(dict(drive=drv["key"], way=int(way), name=W.name.get(way), highway=W.highway.get(way),
                         osm_lanes=W.lanes.get(way), oneway=W.oneway.get(way) in ("yes", "1", "-1"),
                         forward=bool(g.forward.mean() >= 0.5), seconds=len(g),
                         width_m=round(float(g.width.median()), 1), lane_w_m=round(float(g.lane_w.median()), 2),
-                        lanes=total, used=used, k_cars=k_cars, oncoming_seen=int(on.sum())))
+                        lanes=total, used=used, k_cars=k_cars, k_line=k_line if k_line else np.nan,
+                        paint=json.dumps(np.round(paint, 2).tolist()), oncoming_seen=int(on.sum()),
+                        strips=json.dumps([int(x) for x in strips])))
     return pd.DataFrame(out)
 
 
@@ -180,6 +252,13 @@ def fuse(g: pd.DataFrame) -> pd.Series:
         f = int(fw.used.max()) if len(fw) else 0
         b = int(bw.used.max()) if len(bw) else 0
         n = max(n, f + b)
+        kl_f = fw.k_line.dropna() if len(fw) and "k_line" in fw else pd.Series(dtype=float)
+        kl_b = bw.k_line.dropna() if len(bw) and "k_line" in bw else pd.Series(dtype=float)
+        if f + b < n and (len(kl_f) or len(kl_b)):                        # a solid centre line splits it
+            if len(kl_f):
+                f = int(np.clip(np.median(kl_f), f, n - b)); b = max(b, n - f)
+            else:
+                b = int(np.clip(np.median(kl_b), b, n - f)); f = max(f, n - b)
         if f + b < n:
             if len(fw) and len(bw):                                       # both ways driven: cars decide
                 f = int(np.clip(mode("k_cars") if len(fw) == len(g) else int(np.median(fw.k_cars)), f, n - b))
@@ -233,7 +312,11 @@ def counts(all_ways: bool = False) -> pd.DataFrame:
     # lane count right 33 % of the time, the split 11 % (2026-10-27) — at least MIN_DRIVES drives that
     # agree on the lane total
     agree = C.groupby("way").lanes.agg(lambda s: s.value_counts().iat[0])
-    return F[F.way.map(agree).fillna(0) >= MIN_DRIVES].reset_index(drop=True)
+    # and driven both ways (or one-way): only the lanes we drove in split a street reliably; solid /
+    # dashed lines, kerb-to-kerb width and vehicle directions left the score at a third (2026-10-27)
+    both = C.groupby("way").apply(lambda g: bool(g.oneway.iat[0]) or g.forward.nunique() == 2)
+    ok = (F.way.map(agree).fillna(0) >= MIN_DRIVES) & F.way.map(both).fillna(False).astype(bool)
+    return F[ok].reset_index(drop=True)
 
 
 def main():
