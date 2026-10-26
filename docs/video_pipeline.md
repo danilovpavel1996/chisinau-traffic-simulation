@@ -666,3 +666,11 @@ Colab code keep it as the last resort. The light check on Modal reproduced Kaggl
 frames); map position **52.8 m** median, 27 % within 30 m (was 626 m on the wrong road). Still the
 weakest drive: only 158 s inside the street map, on a long, nearly straight road — the heading-profile
 alignment has little to hold on to, and few photos.
+
+**Straight roads (2026-10-26).** 15_48's odometer was 2 % right (2,892 m vs 2,840 m), but the
+heading-profile alignment put it 200 m ahead in the first 10 s and it stayed there: a straight road
+has no shape to align. A pull toward the odometer's guess (`ODO_PULL`, 2° per step per 100 m) fixes it,
+but on city routes it hurt (night drive 15.8 → 21–26 m, also when applied only on their straight
+parts). The routes separate clearly by the map alone — 15_48 91 % straight (0.7 bends/km), the city
+routes 48–60 % (2.9–3.8 bends/km) — so the pull is used only on routes ≥ 80 % straight.
+15_48: **52.8 → 15.2 m** median, 27 → 85 % within 30 m; the four city drives unchanged.

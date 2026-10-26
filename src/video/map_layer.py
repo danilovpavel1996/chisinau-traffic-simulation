@@ -199,6 +199,14 @@ PROFILE_M = 2.0              # heading profiles sampled every 2 m of distance �
 CHANGE_M = 20.0              # … compared as heading change over ±this (immune to slow heading drift)
 BAND_M = 400.0               # alignment searched within ±this of the odometer's guess
 STRETCH_COST = 3.0           # degrees of cost for a step that stretches / squeezes distance
+# A mostly straight route gives the heading profile nothing to align to: 2026_10_24_15_48 (91 % straight,
+# Șos. Muncești) was put 200 m ahead in its first 10 s although its odometer was 2 % right. There, stay
+# near the odometer's guess on the straight parts. City routes (48–60 % straight) are left alone — on
+# them the pull made things worse (night drive 15.8 → 24 m: its odometer drifts more than its bends do).
+ODO_PULL = 2.0               # degrees of cost per step per 100 m away from the odometer's guess …
+STRAIGHT_ROUTE = 0.8         # … on routes at least this share straight …
+FLAT_M = 100.0               # … where there is no bend within ±this
+FLAT_DEG = 10.0              # (heading change below this)
 
 
 def _change(h_deg: np.ndarray, k: int) -> np.ndarray:
@@ -212,12 +220,19 @@ def align_profiles(path_change: np.ndarray, route_change: np.ndarray) -> np.ndar
     n, m = len(path_change), len(route_change)
     scale = m / max(n, 1)
     band = int(BAND_M / PROFILE_M)
+    w = int(FLAT_M / PROFILE_M)
+    bend = np.abs(route_change) >= FLAT_DEG
+    flat = ~(np.convolve(bend, np.ones(2 * w + 1), "same") > 0)          # no bend nearby: shape says nothing
+    pull = ODO_PULL if flat.mean() >= STRAIGHT_ROUTE else 0.0
     INF = 1e18
     D = np.full((n, m), INF, np.float32)
     back = np.zeros((n, m), np.int8)                      # 0 diagonal, 1 from (i-1, j), 2 from (i, j-1)
     for i in range(n):
         lo, hi = max(0, int(i * scale) - band), min(m, int(i * scale) + band + 1)
-        cost = np.abs(path_change[i] - route_change[lo:hi]).astype(np.float32)
+        cost = np.abs(path_change[i] - route_change[lo:hi])
+        if pull:                                           # a straight road says nothing: stay near the odometer
+            cost = cost + pull * flat[lo:hi] * np.abs(np.arange(lo, hi) - i * scale) * PROFILE_M / 100
+        cost = cost.astype(np.float32)
         if i == 0:
             row = np.full(hi - lo, INF, np.float32)
             row[0] = cost[0] if lo == 0 else INF
