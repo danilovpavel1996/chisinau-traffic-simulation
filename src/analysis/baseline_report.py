@@ -10,7 +10,7 @@ Generates a reproducible baseline analysis report:
 
 Usage
 -----
-    python src/analysis/baseline_report.py --config src/config/scenario.yaml
+    python src/analysis/baseline_report.py --config configs/scenario.yaml
     python src/analysis/baseline_report.py --scenario baseline --compare adaptive
 """
 
@@ -189,7 +189,7 @@ def print_summary(kpis: dict, bottlenecks_path: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config",  default="src/config/scenario.yaml")
+    parser.add_argument("--config",  default="configs/scenario.yaml")
     parser.add_argument("--compare", default=None,
                         help="Name of comparison run outputs dir for before/after")
     args = parser.parse_args()

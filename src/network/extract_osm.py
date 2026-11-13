@@ -6,7 +6,7 @@ using the Overpass API and saves it to data/osm/corridor.osm.
 
 Usage
 -----
-    python src/network/extract_osm.py --config src/config/scenario.yaml
+    python src/network/extract_osm.py --config configs/scenario.yaml
     python src/network/extract_osm.py --bbox 28.800 46.940 28.900 47.040
 """
 
@@ -66,7 +66,7 @@ def download_osm(bbox: list[float], out_file: str, retries: int = 3) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Download OSM corridor data")
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     parser.add_argument("--bbox", nargs=4, type=float,
                         metavar=("minLon", "minLat", "maxLon", "maxLat"),
                         help="Override bbox from config")

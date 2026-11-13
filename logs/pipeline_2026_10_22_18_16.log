@@ -1,0 +1,32 @@
+
+━━ localize ━━
+12 crosswalk events from the video
+    re-seeded at turns: 3:55 (1000), 17:11 (0), 19:08 (1000), 20:37 (0), 23:32 (1000)
+  seed 0: evidence   -3325.3
+    re-seeded at turns: 3:53 (1000), 17:11 (0), 19:08 (1000), 20:37 (1000), 23:32 (1000)
+  seed 1: evidence   -2464.0
+    re-seeded at turns: 3:53 (1000), 17:11 (1000), 19:08 (0), 20:37 (0), 23:32 (1000)
+  seed 2: evidence   -4040.8
+    re-seeded at turns: 3:53 (1000), 17:11 (1000), 19:08 (0), 20:37 (1000), 23:32 (1000)
+  seed 3: evidence   -2935.3
+    re-seeded at turns: 3:53 (1000), 17:11 (1000), 19:08 (1000), 20:37 (0), 23:32 (1000)
+  seed 4: evidence   -2488.4
+    re-seeded at turns: 3:53 (1000), 17:11 (1000), 19:08 (1000), 20:37 (0), 23:32 (1000)
+  seed 5: evidence   -3730.8
+    re-seeded at turns: 3:54 (0), 17:14 (1000), 19:08 (0), 20:37 (1000), 23:32 (1000)
+  seed 6: evidence   -2117.8
+    re-seeded at turns: 3:53 (1000), 17:11 (1000), 19:08 (0), 20:37 (0), 23:32 (0)
+  seed 7: evidence   -3231.0
+    re-seeded at turns: 3:53 (1000), 17:11 (0), 19:08 (0), 20:37 (0), 23:32 (1000)
+  seed 8: evidence   -2332.2
+    re-seeded at turns: 3:53 (1000), 17:11 (0), 19:08 (0), 20:37 (1000), 23:32 (0)
+  seed 9: evidence   -3726.5
+kept seed 6 (highest evidence — chosen without looking at the truth)
+accuracy vs GPS (dashcam overlay): median 779 m, 90th pct 1542 m, within 30 m 0% of the time, covers 0% of the true route; at the same moment: median 1339 m, within 50 m 0%
+matched trajectory 7.8 km → /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_18_16/match.json
+   localize done in 63 s
+
+━━ dashboard ━━
+  2026_10_22_18_16: match ✓, GPS ✓, 74 events
+→ /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/dashboard.html  (2 drives)
+   dashboard done in 5 s

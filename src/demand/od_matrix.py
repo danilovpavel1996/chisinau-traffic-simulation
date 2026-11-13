@@ -10,7 +10,7 @@ Outputs
 
 Usage
 -----
-    python src/demand/od_matrix.py --config src/config/scenario.yaml
+    python src/demand/od_matrix.py --config configs/scenario.yaml
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def save_od(df: pd.DataFrame, path: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     args = parser.parse_args()
 
     with open(args.config) as f:

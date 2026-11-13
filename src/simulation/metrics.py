@@ -15,7 +15,7 @@ Outputs
 
 Usage
 -----
-    python src/simulation/metrics.py --config src/config/scenario.yaml
+    python src/simulation/metrics.py --config configs/scenario.yaml
     python src/simulation/metrics.py --tripinfo data/outputs/tripinfo.xml \\
                                       --edgedata data/outputs/edgedata.xml
 """
@@ -192,7 +192,7 @@ def save_metrics(trip_df: pd.DataFrame, edge_df: pd.DataFrame, cfg: dict) -> dic
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config",   default="src/config/scenario.yaml")
+    parser.add_argument("--config",   default="configs/scenario.yaml")
     parser.add_argument("--tripinfo", help="Override tripinfo.xml path")
     parser.add_argument("--edgedata", help="Override edgedata.xml path")
     args = parser.parse_args()

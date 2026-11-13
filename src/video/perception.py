@@ -1,0 +1,658 @@
+"""
+perception.py
+-------------
+Single pass over a drive's video:
+  - detection (RT-DETRv2 on the Colab GPU, or YOLO11s on the laptop) + BoT-SORT
+    tracking with re-identification of vehicles and traffic lights
+  - colour (red / yellow / green) of every detected traffic light
+  - optical flow: the car's own motion (speed, rotation, horizon row) and each
+    vehicle's motion relative to the road below it (parked vs moving)
+
+Usage:
+    .venv-video/bin/python -m src.video.perception <drive> --colab       # RT-DETRv2 on a free Colab T4
+    .venv-video/bin/python -m src.video.perception <drive>               # laptop: YOLO11s (slow, CPU)
+    .venv-video/bin/python -m src.video.perception <drive> --ego-only    # recompute motion only
+
+Detectors (COCO-trained, accuracy on COCO val):
+    rtdetr2   RT-DETRv2, ResNet-101 backbone (Hugging Face PekingU/rtdetr_v2_r101vd), ~54 AP
+    yolo      YOLO11s, 47 AP — kept for laptop runs and comparison
+Tracker: BoT-SORT (botsort_dashcam.yaml) — camera-motion compensation (the dashcam moves
+and turns) and appearance re-identification (yolo26s-reid), so a car hidden behind a
+trolleybus keeps its ID.
+
+Settings (stride, bonnet line) come from configs/drives.yaml.
+Outputs (data/video/processed/<drive>/):
+    detections.parquet   one row per (sampled frame, detected object), incl. object vs
+                         road flow (obj_dx/dy, bg_dx/dy) for parked-car detection
+    ego.parquet          one row per sampled frame: ego_mag, yaw_dx/yaw_slope,
+                         bandN_dy + foe_y (road-plane speed)
+    meta.json            video + run parameters
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pandas as pd
+from src.video import drives
+from src.video.compute import limit_cpu, progress
+from src.video.drives import ROOT
+
+# COCO class ids we care about
+CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck", 9: "traffic_light"}
+VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
+
+MODEL = ROOT / "models" / "yolo11s.pt"   # yolo11s: ~2x the oncoming/light recall of yolo11n, 1.45x slower on CPU
+RTDETR = "PekingU/rtdetr_v2_r101vd"
+TRACKER = Path(__file__).with_name("botsort_dashcam.yaml")
+COCO_NAMES = {"car": "car", "motorcycle": "motorcycle", "motorbike": "motorcycle", "bus": "bus", "truck": "truck",
+              "traffic light": "traffic_light"}
+
+
+# ── Detection + tracking ──────────────────────────────────────────────────────
+class YoloDetector:
+    def __init__(self, imgsz: int, conf: float):
+        from ultralytics import YOLO
+        self.model, self.imgsz, self.conf = YOLO(str(MODEL)), imgsz, conf
+
+    def __call__(self, frame: np.ndarray):
+        r = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, classes=list(CLASSES), verbose=False)[0]
+        if r.boxes is None or not len(r.boxes):
+            return np.zeros((0, 4)), np.zeros(0), []
+        return (r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(),
+                [CLASSES[int(c)] for c in r.boxes.cls.cpu().numpy()])
+
+
+class RTDetrV2Detector:
+    def __init__(self, conf: float, device: str):
+        import torch
+        from transformers import AutoImageProcessor, RTDetrV2ForObjectDetection
+        self.torch, self.device, self.conf = torch, device, conf
+        self.proc = AutoImageProcessor.from_pretrained(RTDETR)
+        self.model = RTDetrV2ForObjectDetection.from_pretrained(RTDETR).to(device).eval()
+        self.names = {i: COCO_NAMES.get(n) for i, n in self.model.config.id2label.items()}
+
+    def __call__(self, frame: np.ndarray):
+        h, w = frame.shape[:2]
+        inputs = self.proc(images=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), return_tensors="pt").to(self.device)
+        with self.torch.no_grad(), self.torch.autocast(self.device, enabled=self.device == "cuda"):
+            out = self.model(**inputs)
+        r = self.proc.post_process_object_detection(out, threshold=self.conf, target_sizes=[(h, w)])[0]
+        keep = [i for i, lab in enumerate(r["labels"].tolist()) if self.names.get(lab)]
+        return (r["boxes"][keep].float().cpu().numpy(), r["scores"][keep].float().cpu().numpy(),
+                [self.names[r["labels"][i].item()] for i in keep])
+
+
+class Dets:
+    """Detections in the form Ultralytics' trackers read: xywh, conf, cls, boolean indexing."""
+
+    def __init__(self, xyxy: np.ndarray, conf: np.ndarray, cls: np.ndarray):
+        self.xyxy, self.conf, self.cls = xyxy.reshape(-1, 4), conf, cls
+
+    @property
+    def xywh(self) -> np.ndarray:
+        x1, y1, x2, y2 = self.xyxy.T
+        return np.column_stack([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1])
+
+    def __len__(self):
+        return len(self.conf)
+
+    def __getitem__(self, i):
+        return Dets(self.xyxy[i], self.conf[i], self.cls[i])
+
+
+def make_tracker(reid: bool, device: str = "cpu"):
+    from ultralytics.trackers.bot_sort import BOTSORT
+    from ultralytics.utils import IterableSimpleNamespace, YAML
+    cfg = YAML.load(TRACKER)
+    cfg["with_reid"] = reid
+    # the ReID model's GPU backend needs an explicit device index: with plain "cuda" it failed
+    # to start ("device_id: None") and silently ran on the CPU at ~3 s per frame
+    cfg["device"] = "cuda:0" if device == "cuda" else device
+    import inspect
+    args = IterableSimpleNamespace(**cfg)                 # older versions scale track_buffer by frame_rate / 30
+    return BOTSORT(args, frame_rate=30) if "frame_rate" in inspect.signature(BOTSORT.__init__).parameters else BOTSORT(args)
+
+
+# ── Distant traffic lights ────────────────────────────────────────────────────
+LIGHT_CONF = 0.3             # untracked light detections kept from this confidence
+TILE_TOP, TILE_CONF = 0.55, 0.4
+
+
+def tile_lights(detect, frame: np.ndarray) -> list:
+    """Traffic lights in the upper image, cut into two overlapping tiles: a distant light is ~1.6×
+    larger in the detector's input (it shrinks every image to 640 px). Clips of 2026_10_24_17_08:
+    real lights the full image missed; below TILE_CONF mostly false (detect_test.py)."""
+    H, W = frame.shape[:2]
+    top = frame[:int(H * TILE_TOP)]
+    out = []
+    for x0, x1 in ((0, int(W * 0.57)), (int(W * 0.43), W)):
+        xyxy, cf, lab = detect(np.ascontiguousarray(top[:, x0:x1]))
+        out += [((int(b[0] + x0), int(b[1]), int(b[2] + x0), int(b[3])), float(c))
+                for b, c, n in zip(xyxy, cf, lab) if n == "traffic_light" and c >= TILE_CONF]
+    return out
+
+
+def iou(a, b) -> float:
+    w = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    h = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    i = w * h
+    return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i + 1e-9)
+
+
+# ── Traffic light colour ──────────────────────────────────────────────────────
+def light_state(frame: np.ndarray, box: tuple[int, int, int, int]) -> str:
+    """Classify a traffic-light crop by its brightest saturated hue."""
+    x1, y1, x2, y2 = box
+    crop = frame[max(y1, 0):y2, max(x1, 0):x2]
+    if crop.size == 0 or crop.shape[0] < 6:
+        return "unknown"
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    lit = (s > 90) & (v > 150)
+    counts = {
+        "red":    int(np.sum(lit & ((h < 10) | (h > 165)))),
+        "yellow": int(np.sum(lit & (h >= 12) & (h <= 35))),
+        "green":  int(np.sum(lit & (h >= 45) & (h <= 95))),
+    }
+    best = max(counts, key=counts.get)
+    # need a lit blob of a few pixels relative to the crop size
+    return best if counts[best] >= max(4, 0.02 * crop.shape[0] * crop.shape[1]) else "unknown"
+
+
+N_BANDS = 8          # horizontal bands between BAND_TOP and the bonnet line
+BAND_TOP = 0.15      # fraction of frame height where the bands start
+
+
+def foe_row(p: np.ndarray, d: np.ndarray, sel: np.ndarray) -> float:
+    """
+    Row of the focus of expansion: the point every flow vector points away
+    from when driving straight (= the horizon row for a forward-looking camera).
+    Least-squares intersection of the flow lines.
+    """
+    m = sel & (np.linalg.norm(d, axis=1) > 0.5)
+    if m.sum() < 20:
+        return np.nan
+    pp, dd = p[m], d[m] / np.linalg.norm(d[m], axis=1, keepdims=True)
+    nrm = np.column_stack([-dd[:, 1], dd[:, 0]])          # line normals
+    A, b = nrm, np.sum(nrm * pp, axis=1)
+    try:
+        sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+    except np.linalg.LinAlgError:
+        return np.nan
+    return float(sol[1])
+
+
+def robust_line(x: np.ndarray, y: np.ndarray, rounds: int = 3) -> tuple[float, float]:
+    """Least-squares y = a + b·x, refitted after trimming points beyond 2.5 MAD."""
+    keep = np.ones(len(x), bool)
+    a = b = 0.0
+    for _ in range(rounds):
+        A = np.column_stack([np.ones(keep.sum()), x[keep]])
+        (a, b), *_ = np.linalg.lstsq(A, y[keep], rcond=None)
+        res = y - (a + b * x)
+        mad = np.median(np.abs(res[keep])) + 1e-6
+        keep = np.abs(res) < 2.5 * 1.4826 * mad
+        if keep.sum() < 10:
+            break
+    return float(a), float(b)
+
+
+# ── Scene motion ──────────────────────────────────────────────────────────────
+class SceneFlow:
+    """
+    Optical flow per sampled frame (all values in full-resolution pixels per
+    sampled frame). Sparse corners for the ego signals, dense flow for boxes:
+
+    ego_mag   median flow magnitude on the road surface → moving / stopped
+    bandN_dy  vertical flow of central points in N row bands, and foe_y the
+              horizon row → road-plane speed in motion.py
+    yaw_dx    rotation (turning), as horizontal flow at the image centre. Fit over
+              all background points: dx = yaw_dx + yaw_slope · (x − centre)/width.
+              Rotation shifts every point equally (intercept); driving forward
+              streams points outward ∝ distance from centre (slope). A plain
+              median mixes the two → a fake left turn whenever the car moves.
+    per box   flow of the vehicle vs flow of the road surface just below it;
+              a parked car moves exactly like the ground it stands on (residual ≈ 0)
+
+    The speed signals (ego_mag, bandN_dy) are measured between the sampled frame
+    and the frame just before it, × the stride (same units): across a whole
+    stride (0.2 s) the road near the car moves further than the tracker can
+    follow above ~50 km/h, and speed saturated (60–80 km/h looked like 30).
+    Rotation and the horizon stay on the full stride — over one frame the
+    rotation is 6× smaller than the tracking noise and fake turns appeared.
+
+    The bottom `hood` fraction of the frame (dashboard / bonnet) is ignored.
+    """
+
+    def __init__(self, width: int, height: int, scale: float = 0.5, hood: float = 0.15):
+        self.scale = scale
+        self.w, self.h = int(width * scale), int(height * scale)
+        self.hood_y = self.h * (1 - hood)
+        self.prev = None
+
+    def _median(self, d: np.ndarray, sel: np.ndarray, min_n: int = 4):
+        return np.median(d[sel], axis=0) / self.scale if sel.sum() >= min_n else None
+
+    def _box_motion(self, prev: np.ndarray, gray: np.ndarray, sb: list) -> list:
+        """
+        Dense (Farneback) flow at quarter resolution, so plain asphalt below a car
+        still gets a motion estimate. Per box: median flow inside the box vs the
+        road strip just below it (same distance as the car → no parallax).
+        """
+        q = 0.5  # relative to the half-res working frame
+        flow = cv2.calcOpticalFlowFarneback(cv2.resize(prev, None, fx=q, fy=q),
+                                            cv2.resize(gray, None, fx=q, fy=q), None,
+                                            0.5, 3, 15, 3, 5, 1.2, 0)
+        hq, wq = flow.shape[:2]
+        occupied = np.zeros((hq, wq), bool)
+        qb = [tuple(int(round(c * q)) for c in b) for b in sb]
+        for x1, y1, x2, y2 in qb:
+            occupied[max(y1, 0):y2, max(x1, 0):x2] = True
+        hood_q = int(self.hood_y * q)
+
+        out = []
+        for x1, y1, x2, y2 in qb:
+            x1, x2 = max(x1, 0), min(x2, wq)
+            bw, bh = x2 - x1, y2 - y1
+            if bw < 4 or bh < 4:
+                out.append(None)
+                continue
+            inner = flow[y1 + bh // 6:y2 - bh // 6, x1 + bw // 6:x2 - bw // 6].reshape(-1, 2)
+            g0, g1 = y2, min(y2 + max(3, int(0.3 * bh)), hood_q)
+            gpatch = flow[g0:g1, x1:x2]
+            gfree = ~occupied[g0:g1, x1:x2]
+            ground = gpatch[gfree].reshape(-1, 2)
+            if len(inner) < 4 or len(ground) < 6:
+                out.append(None)
+                continue
+            mo = np.median(inner, axis=0) / (self.scale * q)
+            mb = np.median(ground, axis=0) / (self.scale * q)
+            out.append(dict(obj_dx=float(mo[0]), obj_dy=float(mo[1]),
+                            bg_dx=float(mb[0]), bg_dy=float(mb[1])))
+        return out
+
+    def update(self, frame: np.ndarray, boxes: list[tuple[int, int, int, int]],
+               before: np.ndarray | None = None, gap: int = 1):
+        """before: the video frame just before this one (speed flow over 1 frame, × gap)."""
+        gray = cv2.cvtColor(cv2.resize(frame, (self.w, self.h)), cv2.COLOR_BGR2GRAY)
+        ego = dict(ego_mag=np.nan, yaw_dx=np.nan, yaw_slope=np.nan, foe_y=np.nan,
+                   **{f"band{i}_dy": np.nan for i in range(N_BANDS)})
+        per_box = [None] * len(boxes)
+        if self.prev is None:
+            self.prev = gray
+            return ego, per_box
+
+        prev, self.prev = self.prev, gray
+        s = self.scale
+        sb = [(x1 * s, y1 * s, x2 * s, y2 * s) for x1, y1, x2, y2 in boxes]
+        mask = np.zeros_like(gray)
+        mask[:int(self.hood_y)] = 255
+
+        def track(ref, k):
+            """Background corner flow ref → this frame (× k): positions, displacements, mask."""
+            pts = cv2.goodFeaturesToTrack(ref, maxCorners=1200, qualityLevel=0.01, minDistance=5, mask=mask)
+            if pts is None or len(pts) < 20:
+                return None
+            nxt, st, _ = cv2.calcOpticalFlowPyrLK(ref, gray, pts, None)
+            good = st.ravel() == 1
+            p, d = nxt[good].reshape(-1, 2), (nxt[good] - pts[good]).reshape(-1, 2) * k
+            in_any = np.zeros(len(p), bool)
+            for x1, y1, x2, y2 in sb:
+                in_any |= (p[:, 0] >= x1) & (p[:, 0] <= x2) & (p[:, 1] >= y1) & (p[:, 1] <= y2)
+            return p, d, ~in_any
+
+        full = track(prev, 1.0)
+        if full is None:
+            return ego, per_box
+        near = full
+        if before is not None:
+            near = track(cv2.cvtColor(cv2.resize(before, (self.w, self.h)), cv2.COLOR_BGR2GRAY), float(gap)) or full
+
+        p, d, bg = near                                    # speed: one-frame flow
+        x, y = p[:, 0], p[:, 1]
+
+        # road band: 30% of frame height just above the bonnet line
+        road = (bg & (y > self.hood_y - 0.3 * self.h) & (y < self.hood_y)
+                & (x > self.w * 0.15) & (x < self.w * 0.85))
+        if road.sum() >= 10:
+            ego["ego_mag"] = float(np.median(np.linalg.norm(d[road], axis=1)) / s)
+        # ground-plane speed: vertical flow of central (lane) points per image row band;
+        # analyze.py divides by (row − horizon)² → speed independent of street width
+        centre = bg & (x > self.w * 0.3) & (x < self.w * 0.7)
+        edges = np.linspace(self.h * BAND_TOP, self.hood_y, N_BANDS + 1)
+        for i in range(N_BANDS):
+            sel = centre & (y >= edges[i]) & (y < edges[i + 1])
+            if sel.sum() >= 5:
+                ego[f"band{i}_dy"] = float(np.median(d[sel, 1]) / s)
+
+        p, d, bg = full                                    # rotation + horizon: full-stride flow
+        x, y = p[:, 0], p[:, 1]
+        scene = bg & (y > self.h * 0.02) & (y < self.hood_y)
+        if scene.sum() >= 20:
+            r, slope = robust_line((x[scene] - self.w / 2) / self.w, d[scene, 0])
+            ego["yaw_dx"], ego["yaw_slope"] = r / s, slope / s
+        ego["foe_y"] = foe_row(p, d, bg) / s
+        if sb:
+            per_box = self._box_motion(prev, gray, sb)
+        return ego, per_box
+
+
+# ── Main pass ─────────────────────────────────────────────────────────────────
+def run(drv: dict, ego_only: bool = False, start: float = 0.0, duration: float | None = None,
+        imgsz: int = 640, conf: float = 0.1, detector: str = "yolo", reid: bool = True, device: str = "cpu",
+        tiles: bool = False) -> Path:
+    video, stride, hood = drv["video"], drv["stride"], drv["camera"]["hood"]
+    limit_cpu()
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        raise FileNotFoundError(video)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    f_start = int(start * fps)
+    f_end = n_total if duration is None else min(n_total, f_start + int(duration * fps))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, f_start)
+
+    out_dir = drv["folder"]
+    saved = None
+    if ego_only:  # recompute motion only; mask cars with the saved detections
+        saved = {f: g for f, g in pd.read_parquet(out_dir / "detections.parquet").groupby("frame")}
+    else:
+        detect = RTDetrV2Detector(conf, device) if detector == "rtdetr2" else YoloDetector(imgsz, conf)
+        tracker = make_tracker(reid, device)
+        names = sorted(set(CLASSES.values()))
+    flow = SceneFlow(W, H, hood=hood)
+
+    det_rows, ego_rows = [], []
+    t0 = time.time()
+    f = f_start
+    last = None                                         # the decoded frame before the current one
+    bar = progress((f_end - f_start + stride - 1) // stride, "perception" + (" (motion only)" if ego_only else ""))
+    while f < f_end:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        before, last = last, frame
+        if (f - f_start) % stride:
+            f += 1
+            continue
+        t = f / fps
+
+        rows = []
+        if saved is not None:
+            g = saved.get(f)
+            veh = [] if g is None else g[g.cls.isin(VEHICLE_CLASSES)][["x1", "y1", "x2", "y2"]].to_numpy()
+            ego, _ = flow.update(frame, [tuple(b) for b in veh], before, stride)
+            ego_rows.append(dict(frame=f, t=t, **ego))
+            bar.update(1)
+            f += 1
+            continue
+
+        xyxy, cf, labels = detect(frame)
+        tracks = tracker.update(Dets(xyxy, cf, np.array([names.index(n) for n in labels], float)), frame)
+        tracked = set(tracks[:, 7].astype(int)) if len(tracks) else set()
+        # traffic lights: every confident detection, tracked or not — world.py places lights by
+        # geometry, and a small light rarely becomes a confirmed track (2026_10_24_17_08 at 15:19:
+        # 1–2 detections kept at 5 fps of a light seen the whole time)
+        lights = [(tuple(xyxy[i].astype(int)), float(cf[i])) for i, n in enumerate(labels)
+                  if n == "traffic_light" and i not in tracked and cf[i] >= LIGHT_CONF]
+        if tiles:
+            lights += [b for b in tile_lights(detect, frame) if all(iou(b[0], tuple(xyxy[i])) < 0.3
+                                                                for i, n in enumerate(labels) if n == "traffic_light")]
+        for (x1, y1, x2, y2), p in lights:
+            rows.append(dict(frame=f, t=t, track_id=-1, cls="traffic_light", conf=p, x1=x1, y1=y1, x2=x2, y2=y2,
+                             light=light_state(frame, (x1, y1, x2, y2))))
+        if len(tracks):
+            idx = tracks[:, 7].astype(int)                  # tracked detections: their own box, score, class
+            for (x1, y1, x2, y2), p, name, tid in zip(xyxy[idx].astype(int), cf[idx], [labels[i] for i in idx],
+                                                      tracks[:, 4].astype(int)):
+                if name in VEHICLE_CLASSES and (y1 + y2) / 2 > H * drv["camera"].get("bonnet", 1 - hood):
+                    continue  # bonnet / dashboard detected as a car
+                rows.append(dict(frame=f, t=t, track_id=int(tid), cls=name, conf=float(p),
+                                 x1=x1, y1=y1, x2=x2, y2=y2,
+                                 light=light_state(frame, (x1, y1, x2, y2))
+                                 if name == "traffic_light" else None))
+
+        # flow on the clean frame, before anything is drawn on it
+        veh = [r for r in rows if r["cls"] in VEHICLE_CLASSES]
+        ego, per_box = flow.update(frame, [(r["x1"], r["y1"], r["x2"], r["y2"]) for r in veh], before, stride)
+        for r, m in zip(veh, per_box):
+            r.update(m or {})
+        det_rows.extend(rows)
+        ego_rows.append(dict(frame=f, t=t, **ego))
+
+
+        bar.update(1)
+        f += 1
+
+    bar.close()
+    cap.release()
+
+    ego_df = pd.DataFrame(ego_rows)
+    ego_df.to_parquet(out_dir / "ego.parquet", index=False)
+    if ego_only:
+        print(f"ego.parquet rewritten ({len(ego_df)} frames, {time.time() - t0:.0f} s)")
+        return out_dir
+    det = pd.DataFrame(det_rows)
+    det.to_parquet(out_dir / "detections.parquet", index=False)
+    meta = dict(video=str(video.relative_to(ROOT)), fps=fps, width=W, height=H, stride=stride,
+                start_s=start, end_s=f / fps, model=RTDETR if detector == "rtdetr2" else MODEL.name,
+                imgsz=imgsz, conf=conf, hood=hood, tracker=TRACKER.name, reid=reid,
+                n_sampled_frames=len(ego_df), n_detections=len(det),
+                runtime_s=round(time.time() - t0, 1))
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    print(json.dumps(meta, indent=2))
+    return out_dir
+
+
+# ── Google Colab (free GPU) ───────────────────────────────────────────────────
+SHIP = ["src/video/__init__.py", "src/video/perception.py", "src/video/compute.py", "src/video/drives.py",
+        "src/video/botsort_dashcam.yaml", "configs/drives.yaml"]
+OUTPUTS = ["detections.parquet", "ego.parquet", "meta.json"]
+
+
+CHUNK_S = 240              # seconds of video per Colab job (a multiple of every stride, in frames)
+CHUNK_CRF = 26             # upload quality: CRF 30 hid ~40 % of small traffic lights (detect_test.py)
+CHUNK_ID = 1_000_000       # track ids of chunk i start at i × this (the tracker restarts per chunk)
+
+
+def chunk_video(drv: dict, i: int, fps: float, n_frames: int) -> tuple[Path, int, int]:
+    """Frames [f0, f1) of the video as a lightly compressed clip (exact frames: accurate seek)."""
+    f0 = i * int(round(CHUNK_S * fps))
+    f1 = min(n_frames, f0 + int(round(CHUNK_S * fps)))
+    out = drv["folder"] / "colab" / "chunks" / f"{drv['key']}_{i:02d}.mp4"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["nice", "-n", "10", "ffmpeg", "-v", "error", "-y", "-ss", f"{f0 / fps:.4f}", "-i", str(drv["video"]),
+                        "-frames:v", str(f1 - f0), "-map", "0:v:0", "-c:v", "libx264", "-preset", "veryfast",
+                        "-crf", str(CHUNK_CRF), "-threads", "4", "-pix_fmt", "yuvj420p", "-an", str(out)], check=True)
+    return out, f0, f1
+
+
+def run_colab(drv: dict, detector: str = "rtdetr2", reid: bool = True, reuse: bool = False):
+    """
+    The same perception code on a Colab T4, in chunks of CHUNK_S seconds: each chunk is uploaded,
+    detected and downloaded as its own job, so a free GPU taken back half-way costs one chunk, and
+    a rerun resumes at the first missing one. The chunks are then joined: frame numbers and times
+    shifted back, track ids made unique per chunk (tracks are cut at chunk borders).
+    """
+    import io
+    import zipfile
+    from src.video.colab import Session
+    folder, key = drv["folder"], drv["key"]
+    cap = cv2.VideoCapture(str(drv["video"]))
+    fps, n_frames = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    n_chunks = -(-n_frames // int(round(CHUNK_S * fps)))
+    parts = folder / "colab" / "chunks"
+    parts.mkdir(parents=True, exist_ok=True)
+    todo = [i for i in range(n_chunks) if not (parts / f"detections_{i:02d}.parquet").exists()]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for rel in SHIP:
+            z.write(ROOT / rel, rel)
+    code = folder / "colab" / "perception_code.zip"
+    code.write_bytes(buf.getvalue())
+    video_rel = drv["video"].relative_to(ROOT)
+    t0 = time.time()
+    if todo:
+        with Session(f"perception-{key}", reuse=reuse) as s:
+            s.upload(code, "/content/repo/code.zip")
+            s.install("ultralytics", "onnxruntime-gpu", "transformers>=4.50")
+            for i in todo:
+                clip, f0, f1 = chunk_video(drv, i, fps, n_frames)
+                print(f"chunk {i + 1}/{n_chunks}: frames {f0}–{f1} ({clip.stat().st_size / 1e6:.0f} MB)", flush=True)
+                s.upload(clip, f"/content/repo/{video_rel}")
+                s.start(f"""import subprocess, sys, zipfile
+zipfile.ZipFile("/content/repo/code.zip").extractall("/content/repo")
+sys.exit(subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
+                          "--device", "cuda", "--tiles"] + ([] if {reid} else ["--no-reid"]), cwd="/content/repo"))
+""")
+                code_ = s.wait()
+                if code_ != 0:
+                    print(s.log())
+                    raise RuntimeError(f"perception chunk {i} on Colab failed (exit {code_})")
+                for name in OUTPUTS:
+                    stem, ext = name.split(".")
+                    s.download(f"/content/repo/data/video/processed/{key}/{name}", parts / f"{stem}_{i:02d}.{ext}")
+                print(f"   chunk {i + 1}/{n_chunks} done ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    join_chunks(drv, n_chunks, fps, detector)
+    print(f"Colab perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+
+
+CLOUD_JOB = """
+import glob, os, shutil, subprocess, sys, time, zipfile
+repo, out = "/tmp/repo", "/content/out"
+zipfile.ZipFile("/content/code.zip").extractall(repo)
+os.makedirs(out, exist_ok=True)
+video = os.path.join(repo, "{video_rel}")
+os.makedirs(os.path.dirname(video), exist_ok=True)
+for c in sorted(glob.glob("/content/chunk_*.mp4")):
+    i = c.split("chunk_")[1].split(".")[0]
+    t0 = time.time()
+    shutil.copy(c, video)
+    r = subprocess.call([sys.executable, "-m", "src.video.perception", "{key}", "--detector", "{detector}",
+                         "--device", "cuda", "--tiles"] + ([] if {reid} else ["--no-reid"]), cwd=repo)
+    if r != 0:
+        sys.exit(r)
+    for name in ("detections.parquet", "ego.parquet", "meta.json"):
+        stem, ext = name.split(".")
+        shutil.copy(os.path.join(repo, "data/video/processed/{key}", name), os.path.join(out, f"{{stem}}_{{i}}.{{ext}}"))
+    print(f"chunk {{i}} done in {{(time.time() - t0) / 60:.1f}} min", flush=True)
+"""
+CLOUD_PIP = ["ultralytics", "onnxruntime-gpu", "transformers==4.46.3", "pyyaml"]
+
+
+def run_cloud(drv: dict, detector: str = "rtdetr2", reid: bool = True):
+    """The same chunks as run_colab, as one job on the GPU services (gpu.py: Modal, else Kaggle, …): all
+    chunks in one go (neither takes the GPU back), results joined the same way."""
+    import io
+    import zipfile
+    from src.video import gpu
+    folder, key = drv["folder"], drv["key"]
+    cap = cv2.VideoCapture(str(drv["video"]))
+    fps, n_frames = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    n_chunks = -(-n_frames // int(round(CHUNK_S * fps)))
+    parts = folder / "colab" / "chunks"
+    parts.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    if not all((parts / f"detections_{i:02d}.parquet").exists() for i in range(n_chunks)):
+        print(f"cutting {n_chunks} chunks (CRF {CHUNK_CRF})…", flush=True)
+        up = {f"/content/chunk_{i:02d}.mp4": chunk_video(drv, i, fps, n_frames)[0] for i in range(n_chunks)}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for rel in SHIP:
+                z.write(ROOT / rel, rel)
+        code = folder / "colab" / "perception_code.zip"
+        code.write_bytes(buf.getvalue())
+        up["/content/code.zip"] = code
+        down = {f"/content/out/{stem}_{i:02d}.{ext}": parts / f"{stem}_{i:02d}.{ext}"
+                for i in range(n_chunks) for stem, ext in (("detections", "parquet"), ("ego", "parquet"), ("meta", "json"))}
+        script = CLOUD_JOB.format(video_rel=drv["video"].relative_to(ROOT), key=key, detector=detector, reid=reid)
+        gpu.run_job(f"perception {key}", script, up, down, folder / "colab" / "cloud_perception", pip=CLOUD_PIP,
+                    order=gpu.CLOUD)
+    join_chunks(drv, n_chunks, fps, detector)
+    print(f"perception ({detector}, {n_chunks} chunks) done in {(time.time() - t0) / 60:.1f} min → {folder}", flush=True)
+
+
+run_kaggle = run_cloud          # the old name (pipeline, --kaggle)
+
+
+def run_remote(drv: dict, detector: str = "rtdetr2", reid: bool = True):
+    """The GPU services first (Modal, Kaggle), this module's own Colab code if they all fail."""
+    try:
+        run_cloud(drv, detector, reid)
+    except Exception as e:
+        print(f"GPU services failed ({e}); trying Colab…", flush=True)
+        run_colab(drv, detector, reid)
+
+
+def join_chunks(drv: dict, n_chunks: int, fps: float, detector: str):
+    folder = drv["folder"]
+    parts = folder / "colab" / "chunks"
+    dets, egos, metas = [], [], []
+    for i in range(n_chunks):
+        f0 = i * int(round(CHUNK_S * fps))
+        d = pd.read_parquet(parts / f"detections_{i:02d}.parquet")
+        e = pd.read_parquet(parts / f"ego_{i:02d}.parquet")
+        for df in (d, e):
+            df["frame"] += f0
+            df["t"] = df.frame / fps
+        d.loc[d.track_id >= 0, "track_id"] += i * CHUNK_ID
+        dets.append(d)
+        egos.append(e)
+        metas.append(json.loads((parts / f"meta_{i:02d}.json").read_text()))
+    for name in ("detections.parquet", "ego.parquet", "meta.json"):           # the previous run, to compare
+        old, keep = folder / name, folder / name.replace(".", "_v1.", 1)
+        if old.exists() and not keep.exists():
+            keep.write_bytes(old.read_bytes())
+    (folder / "detections_raw.parquet").unlink(missing_ok=True)              # bonnet.py cleans the new ones
+    det = pd.concat(dets, ignore_index=True)
+    det.to_parquet(folder / "detections.parquet", index=False)
+    pd.concat(egos, ignore_index=True).to_parquet(folder / "ego.parquet", index=False)
+    meta = dict(metas[0], video=str(drv["video"].relative_to(ROOT)), start_s=0.0,
+                end_s=float(sum(m["end_s"] for m in metas)), n_sampled_frames=sum(m["n_sampled_frames"] for m in metas),
+                n_detections=len(det), runtime_s=round(sum(m["runtime_s"] for m in metas), 1),
+                chunks=n_chunks, chunk_s=CHUNK_S, chunk_crf=CHUNK_CRF, tiles=True)
+    (folder / "meta.json").write_text(json.dumps(meta, indent=2))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
+    ap.add_argument("--ego-only", action="store_true",
+                    help="recompute ego.parquet only, reusing saved detections (fast)")
+    ap.add_argument("--start", type=float, default=0.0, help="start time, seconds (for quick tests)")
+    ap.add_argument("--duration", type=float, default=None, help="seconds to process (default: all)")
+    ap.add_argument("--detector", choices=["rtdetr2", "yolo"], default=None,
+                    help="default: rtdetr2 with --colab, yolo on the laptop")
+    ap.add_argument("--no-reid", action="store_true", help="BoT-SORT without appearance re-identification")
+    ap.add_argument("--device", default="cpu", help="cpu / cuda")
+    ap.add_argument("--colab", action="store_true", help="run on a free Colab T4 GPU via the Colab CLI")
+    ap.add_argument("--reuse", action="store_true", help="with --colab: attach to the drive's runtime if still alive")
+    ap.add_argument("--tiles", action="store_true", help="also look for distant traffic lights in two tiles of the upper image")
+    ap.add_argument("--kaggle", action="store_true", help="run on a Kaggle T4 notebook (kaggle_run.py)")
+    a = ap.parse_args()
+    drv = drives.load(a.drive)
+    if a.kaggle:
+        run_kaggle(drv, a.detector or "rtdetr2", not a.no_reid)
+    elif a.colab:
+        run_colab(drv, a.detector or "rtdetr2", not a.no_reid, a.reuse)
+    else:
+        run(drv, a.ego_only, a.start, a.duration, detector=a.detector or "yolo",
+            reid=not a.no_reid and a.device != "cpu", device=a.device, tiles=a.tiles)
+
+
+if __name__ == "__main__":
+    main()

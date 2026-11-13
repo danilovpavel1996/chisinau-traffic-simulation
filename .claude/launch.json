@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": ".venv-video/bin/python",
+      "runtimeArgs": ["-m", "src.video.dashboard.serve"],
+      "port": 8765
+    }
+  ]
+}

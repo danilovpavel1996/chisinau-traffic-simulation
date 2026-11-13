@@ -1,0 +1,51 @@
+exporting frames for Colab:   0%|          | 0/515 [00:00 elapsed, ? left, ?frame/s]exporting frames for Colab:   2%|▏         | 12/515 [00:02 elapsed, 01:26 left,  5.79frame/s]exporting frames for Colab:   5%|▍         | 25/515 [00:04 elapsed, 01:22 left,  5.92frame/s]exporting frames for Colab:   8%|▊         | 39/515 [00:06 elapsed, 01:17 left,  6.12frame/s]exporting frames for Colab:  10%|█         | 52/515 [00:08 elapsed, 01:14 left,  6.18frame/s]exporting frames for Colab:  13%|█▎        | 65/515 [00:10 elapsed, 01:12 left,  6.22frame/s]exporting frames for Colab:  15%|█▌        | 78/515 [00:12 elapsed, 01:10 left,  6.23frame/s]exporting frames for Colab:  18%|█▊        | 91/515 [00:14 elapsed, 01:08 left,  6.21frame/s]exporting frames for Colab:  20%|██        | 104/515 [00:16 elapsed, 01:06 left,  6.14frame/s]exporting frames for Colab:  23%|██▎       | 117/515 [00:19 elapsed, 01:05 left,  6.09frame/s]exporting frames for Colab:  25%|██▌       | 130/515 [00:21 elapsed, 01:03 left,  6.09frame/s]exporting frames for Colab:  28%|██▊       | 143/515 [00:23 elapsed, 01:00 left,  6.11frame/s]exporting frames for Colab:  30%|███       | 157/515 [00:25 elapsed, 00:58 left,  6.17frame/s]exporting frames for Colab:  33%|███▎      | 170/515 [00:27 elapsed, 00:56 left,  6.16frame/s]exporting frames for Colab:  36%|███▌      | 183/515 [00:29 elapsed, 00:53 left,  6.16frame/s]exporting frames for Colab:  38%|███▊      | 196/515 [00:31 elapsed, 00:52 left,  6.12frame/s]exporting frames for Colab:  41%|████      | 209/515 [00:34 elapsed, 00:50 left,  6.11frame/s]exporting frames for Colab:  43%|████▎     | 222/515 [00:36 elapsed, 00:48 left,  6.05frame/s]exporting frames for Colab:  46%|████▌     | 235/515 [00:38 elapsed, 00:46 left,  6.01frame/s]exporting frames for Colab:  48%|████▊     | 248/515 [00:41 elapsed, 00:44 left,  5.97frame/s]exporting frames for Colab:  51%|█████     | 261/515 [00:43 elapsed, 00:42 left,  5.99frame/s]exporting frames for Colab:  53%|█████▎    | 274/515 [00:45 elapsed, 00:40 left,  5.98frame/s]exporting frames for Colab:  56%|█████▌    | 287/515 [00:47 elapsed, 00:38 left,  5.97frame/s]exporting frames for Colab:  58%|█████▊    | 299/515 [00:49 elapsed, 00:36 left,  5.95frame/s]exporting frames for Colab:  60%|██████    | 311/515 [00:51 elapsed, 00:34 left,  5.93frame/s]exporting frames for Colab:  63%|██████▎   | 323/515 [00:54 elapsed, 00:32 left,  5.89frame/s]exporting frames for Colab:  65%|██████▌   | 335/515 [00:56 elapsed, 00:30 left,  5.88frame/s]exporting frames for Colab:  67%|██████▋   | 347/515 [00:58 elapsed, 00:28 left,  5.88frame/s]exporting frames for Colab:  70%|██████▉   | 359/515 [01:00 elapsed, 00:26 left,  5.88frame/s]exporting frames for Colab:  72%|███████▏  | 371/515 [01:02 elapsed, 00:24 left,  5.85frame/s]exporting frames for Colab:  74%|███████▍  | 383/515 [01:04 elapsed, 00:22 left,  5.84frame/s]exporting frames for Colab:  77%|███████▋  | 395/515 [01:06 elapsed, 00:20 left,  5.82frame/s]exporting frames for Colab:  79%|███████▉  | 407/515 [01:08 elapsed, 00:18 left,  5.82frame/s]exporting frames for Colab:  81%|████████▏ | 419/515 [01:11 elapsed, 00:16 left,  5.81frame/s]exporting frames for Colab:  84%|████████▎ | 431/515 [01:13 elapsed, 00:14 left,  5.81frame/s]exporting frames for Colab:  86%|████████▌ | 443/515 [01:15 elapsed, 00:12 left,  5.80frame/s]exporting frames for Colab:  88%|████████▊ | 455/515 [01:17 elapsed, 00:10 left,  5.79frame/s]exporting frames for Colab:  91%|█████████ | 467/515 [01:19 elapsed, 00:08 left,  5.75frame/s]exporting frames for Colab:  93%|█████████▎| 479/515 [01:21 elapsed, 00:06 left,  5.74frame/s]exporting frames for Colab:  95%|█████████▌| 491/515 [01:24 elapsed, 00:04 left,  5.72frame/s]exporting frames for Colab:  98%|█████████▊| 503/515 [01:26 elapsed, 00:02 left,  5.65frame/s]exporting frames for Colab: 100%|██████████| 515/515 [01:29 elapsed, 00:00 left,  5.61frame/s]exporting frames for Colab: 100%|██████████| 515/515 [01:29 elapsed, 00:00 left,  5.78frame/s]
+→ /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/2026_10_22_10_21AM_frames.zip (46 MB, 515 frames)
+→ /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/scene_colab.ipynb
+1/5 starting a T4 GPU runtime (first time: sign in to Google when asked)…
+$ colab new -s scene-2026-10-22-10-21am --gpu T4
+[colab] Creating session 'scene-2026-10-22-10-21am'...
+[colab] Session READY.
+2/5 uploading 46 MB of frames in 2 parts…
+    part 1/2
+$ colab upload -s scene-2026-10-22-10-21am /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/parts/part_000 /content/part_000
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/parts/part_000' to '/content/part_000'
+    part 2/2
+$ colab upload -s scene-2026-10-22-10-21am /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/parts/part_001 /content/part_001
+[colab] Uploaded '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/parts/part_001' to '/content/part_001'
+3/5 installing transformers on the VM…
+$ colab install -s scene-2026-10-22-10-21am transformers==4.46.3
+[colab] Installing packages on scene-2026-10-22-10-21am (preferring uv)...
+Installation Complete (via uv)!
+4/5 segmenting on the GPU…
+$ colab exec -s scene-2026-10-22-10-21am -f /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/remote_scene.py
+/usr/local/lib/python3.13/dist-packages/huggingface_hub/utils/_auth.py:104: UserWarning: 
+Error while fetching `HF_TOKEN` secret value from your vault: 'Requesting secret HF_TOKEN timed out. Secrets can only be fetched when running from the Colab UI.'.
+You are not authenticated with the Hugging Face Hub in this notebook.
+If the error persists, please let us know by opening an issue on GitHub (https://github.com/huggingface/huggingface_hub/issues/new).
+  warnings.warn(
+preprocessor_config.json:   0%|          | 0.00/536 [00:00<?, ?B/s]
+/usr/local/lib/python3.13/dist-packages/transformers/utils/deprecation.py:165: UserWarning: The following named arguments are not valid for `Mask2FormerImageProcessor.__init__` and were ignored: '_max_size'
+  return func(*args, **kwargs)
+config.json: 0.00B [00:00, ?B/s]
+model.safetensors:   0%|          | 0.00/866M [00:00<?, ?B/s]
+GPU: Tesla T4 | 515 frames
+  50/515 frames  0.22 s/frame  ~1.7 min left
+  100/515 frames  0.18 s/frame  ~1.2 min left
+  150/515 frames  0.16 s/frame  ~1.0 min left
+  200/515 frames  0.16 s/frame  ~0.8 min left
+  250/515 frames  0.15 s/frame  ~0.7 min left
+  300/515 frames  0.15 s/frame  ~0.5 min left
+  350/515 frames  0.15 s/frame  ~0.4 min left
+  400/515 frames  0.15 s/frame  ~0.3 min left
+  450/515 frames  0.15 s/frame  ~0.2 min left
+  500/515 frames  0.15 s/frame  ~0.0 min left
+  515/515 frames  0.14 s/frame  ~0.0 min left
+done: 515 frames in 75 s
+5/5 downloading the result…
+$ colab download -s scene-2026-10-22-10-21am /content/scene.parquet /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/scene.colab.parquet
+[colab] Downloaded '/content/scene.parquet' to '/Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/colab/scene.colab.parquet'
+releasing the GPU runtime…
+[colab] Stopping session 'scene-2026-10-22-10-21am'...
+[colab] Session terminated.
+→ /Users/danilovpavel/Documents/traffic_chisinau/chisinau-commute-upgrade/data/video/processed/2026_10_22_10_21AM/scene.parquet: 515 frames, crosswalk in 12% of them
+Colab segmentation done in 2.4 min

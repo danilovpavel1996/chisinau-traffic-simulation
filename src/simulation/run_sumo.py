@@ -9,10 +9,10 @@ Supports two modes:
 Usage
 -----
     # Batch (baseline fixed-time):
-    python src/simulation/run_sumo.py --config src/config/scenario.yaml
+    python src/simulation/run_sumo.py --config configs/scenario.yaml
 
     # TraCI (adaptive controller):
-    python src/simulation/run_sumo.py --config src/config/scenario.yaml \\
+    python src/simulation/run_sumo.py --config configs/scenario.yaml \\
            --mode traci --controller adaptive_pressure
 """
 
@@ -149,7 +149,7 @@ def run_traci(sumocfg: str, controller_name: str, cfg: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Run SUMO corridor simulation")
-    parser.add_argument("--config", default="src/config/scenario.yaml")
+    parser.add_argument("--config", default="configs/scenario.yaml")
     parser.add_argument("--mode",   choices=["batch", "traci"], default="batch")
     parser.add_argument("--controller", default="adaptive_pressure",
                         help="Controller name (traci mode only)")

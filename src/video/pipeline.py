@@ -1,0 +1,131 @@
+"""
+pipeline.py
+-----------
+Run every step for one drive, in order:
+
+    perception   video → detections.parquet, ego.parquet: RT-DETRv2 + BoT-SORT (Google Colab GPU)
+    overlay      → gps.parquet: dashcam's burnt-in time/speed/GPS (ground truth; skipped if none)
+    traffic      → tracks.parquet, stops/turns/per_minute.csv, timeline.png
+    scene        → scene.parquet: crosswalks, lane markings, curbs… on candidate frames (Google Colab GPU)
+    dense        → scene_dense.parquet + depth.parquet: segmentation and depth, 5 frames/s (Google Colab GPU)
+    localize     → match.json (video-only route on the map, accuracy vs truth / GPS)
+    road         → road.parquet: road width + side-street openings from the class maps
+    events       → events.parquet: junction events seen in the video (turns, roundabouts, crosswalks, signals)
+    event_match  → event_match.json: video-only route from start + destination (event-based)
+    lens         → calibration.json: focal length + distortion measured with GeoCalib (Google Colab GPU)
+    calibrate    → calibration.json: field of view + depth scale measured against the map; re-match
+    bev          → bev.mp4: spatial view — what the camera sees vs what the map expects
+    surround     → surround_ground.mp4, surround_data.js: the Tesla-style 3D view (road, vehicles, lights)
+    position     → trace.parquet: where the car is every second (GPS if available, else the match)
+    lanes        → lanes.parquet, lanes_by_street.csv
+    signs        → text.parquet: street names and named places read in the video (no number plates)
+    streets      → stops_detail.csv, streets.csv + data/video/aggregate/ (all drives)
+    dashboard    → data/video/dashboard.html (all drives) + this drive's dashboard_data.js
+
+Usage:
+    .venv-video/bin/python -m src.video.pipeline <drive>                    # all steps
+    .venv-video/bin/python -m src.video.pipeline <drive> --from localize    # skip earlier steps
+
+Add the drive to configs/drives.yaml first (video path, camera, street window).
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+
+from src.video import drives
+
+STEPS = ["overlay", "perception", "bonnet", "traffic", "scene", "dense", "lens", "road", "events", "event_match", "calibrate", "points", "speed", "bev", "surround", "position", "lanes", "signs",
+         "streets", "dashboard"]
+
+
+def run_step(step: str, drv: dict):
+    if step == "overlay":
+        from src.video import overlay
+        overlay.run(drv)
+    elif step == "perception":                # > 5 min on the laptop → free Colab GPU
+        from src.video import perception
+        perception.run_remote(drv)          # Kaggle, else Colab
+    elif step == "bonnet":                    # where our own car is in the picture; its boxes dropped
+        from src.video import bonnet
+        bonnet.run(drv)
+    elif step == "traffic":
+        from src.video import traffic
+        traffic.run(drv)
+    elif step == "scene":                     # > 5 min on the laptop → free Colab GPU
+        from src.video import scene
+        scene.run_remote(drv)               # Kaggle, else Colab
+    elif step == "dense":                     # > 5 min on the laptop → free Colab GPU
+        from src.video import dense
+        dense.run_remote(drv)               # Kaggle, else Colab
+    elif step == "lens":
+        from src.video import lens
+        lens.run_colab(drv)
+    elif step == "calibrate":
+        from src.video import calibrate
+        calibrate.run(drv)
+    elif step == "points":                    # scene points through every frame pair (speed.py): Kaggle
+        from src.video import track_points
+        try:
+            track_points.run_kaggle(drv)
+        except Exception as e:
+            print(f"Kaggle failed ({e}); trying Colab…", flush=True)
+            track_points.run_colab(drv)
+    elif step == "speed":                     # needs track_points.py's motion.parquet (Colab CPU)
+        from src.video import speed
+        if (drv["folder"] / "motion.parquet").exists():
+            speed.run(drv)
+        else:
+            print("   no motion.parquet yet (python -m src.video.track_points <drive> --colab) — skipped")
+    elif step == "bev":
+        from src.video import bev
+        bev.run(drv)
+    elif step == "surround":
+        from src.video import surround
+        surround.run(drv)
+    elif step == "road":
+        from src.video import road_geometry
+        road_geometry.run(drv)
+    elif step == "events":
+        from src.video import events
+        events.run(drv)
+    elif step == "event_match":
+        from src.video import event_match
+        event_match.run(drv)
+    elif step == "localize":
+        from src.video import localize
+        localize.run(drv)
+    elif step == "position":
+        from src.video import position
+        position.run(drv)
+    elif step == "lanes":
+        from src.video import lanes
+        lanes.run(drv)
+    elif step == "signs":
+        from src.video import signs
+        signs.run(drv)
+    elif step == "streets":
+        from src.video import street_stats
+        street_stats.run(drv)
+        street_stats.aggregate()
+    elif step == "dashboard":
+        from src.video.dashboard import build
+        build.run(drv)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("drive", help="drive key in configs/drives.yaml")
+    ap.add_argument("--from", dest="start", choices=STEPS, default=STEPS[0], help="first step to run")
+    a = ap.parse_args()
+    drv = drives.load(a.drive)
+    for step in STEPS[STEPS.index(a.start):]:
+        t0 = time.time()
+        print(f"\n━━ {step} ━━")
+        run_step(step, drv)
+        print(f"   {step} done in {time.time() - t0:.0f} s")
+
+
+if __name__ == "__main__":
+    main()

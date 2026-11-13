@@ -1,0 +1,114 @@
+# Recorded drives and their per-drive settings.
+# start / destination: the two points an uploader gives (date + time come from the video).
+# Key = drive name (quoted: YAML reads 2026_10_22_18_16 as a number); outputs go to
+# data/video/processed/<key>/.
+
+"2026_10_22_10_21AM":
+  video: data/video/raw/2026_10_22_10_21AM.MOV
+  description: Home → office (Zity Mall), iPhone 16 Pro Max on the dashboard
+  camera:
+    hfov_deg: 70        # assumed horizontal field of view (iPhone 1x video)
+    hood: 0.45          # bottom fraction of the frame that is bonnet / dashboard
+  stride: 6             # process every 6th frame (≈5 fps)
+  street_window_s: [95, 850]   # before: mounting phone + parking lot; after: parking at the mall
+  start: [47.0586785, 28.8139849]   # given by the uploader (here: phone GPS at home)
+  destination: [47.0397, 28.8036]   # given by the uploader (Zity Mall)
+  truth:
+    source: Google Maps directions confirmed by the driver (2026-10-22)
+    streets:            # in driving order, as in the directions
+      - Strada Mircești
+      - Strada Petricani
+      - Strada Mihai Viteazul       # roundabout, 1st exit
+      - Strada Columna              # right turn
+      - Strada Henri Coandă
+      - Strada Calea Ieșilor        # roundabout, 2nd exit
+    end: [47.0397, 28.8036]         # Zity Mall (start = the video's GPS anchor)
+
+"2026_10_22_18_16":
+  video: data/video/raw/2026_10_22_18_16.mp4      # 10 dashcam clips joined (original clips deleted 2026-10-23: the join is lossless)
+  description: Office (Zity Mall) → home, dashcam (front camera), evening / dusk
+  camera:
+    hfov_deg: 120       # typical dashcam wide lens — to be calibrated against the GPS overlay
+    hood: 0.12          # bonnet + overlay strip at the bottom
+  stride: 6
+  street_window_s: [50, 1440]  # leaving the Zity Mall lot … arriving home (from the GPS overlay)
+  start: [47.039333, 28.804017]   # as an uploader would give it (= first GPS fix, Zity Mall)
+  destination: [47.058783, 28.813900]   # (= last GPS fix, home)
+  overlay:
+    height_px: 46       # burnt-in "date time | speed | lat, lon" strip → GPS ground truth
+
+"2026_10_23_10_06":
+  video: data/video/raw/2026_10_23_10_06.mp4      # 4 dashcam clips joined (original clips deleted 2026-10-23: the join is lossless)
+  description: Home → office (Zity Mall), dashcam (front camera), morning / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # start / destination pins on the street (the yard and the mall car park are not in the
+  # OSM drive network); times from the video's own turn detection, not GPS:
+  street_window_s: [131, 642]                       # end of the U-turn on Mircești · start of the turn into the mall
+  start: [47.059333, 28.811350]                     # Mircești, heading south-east after the U-turn
+  destination: [47.038970, 28.803540]               # Calea Ieșilor, where the car turns into Zity Mall
+  overlay:
+    height_px: 46
+
+"2026_10_23_19_26":
+  video: data/video/raw/2026_10_23_19_26.mp4      # 4 dashcam clips joined; the first (trimmed, HEVC) re-encoded to H.264
+  description: Bd. Moscova → Ciocana, dashcam (front camera), night / wet road
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # start on Bd. Moscova (first second of the video); destination where the car turns off the street
+  # network at Ion Dumeniuc × Mircea cel Bătrân (then ~180 m on an unmapped road, then parked);
+  # end time = start of that turn (left ~150°) in the video's own turn detection, not GPS
+  street_window_s: [0.5, 439.4]
+  start: [47.048367, 28.862917]
+  destination: [47.056500, 28.891382]
+  overlay:
+    height_px: 46
+
+"2026_10_24_15_48":
+  video: data/video/raw/2026_10_24_15_48.mp4      # 6 dashcam clips joined (lossless)
+  description: Out of town (south, ~21 km, mostly 60–110 km/h) → Șoseaua Muncești, dashcam (front camera), afternoon / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # the street map covers Chișinău only: the route is matched from where the car enters it
+  # (Șos. Muncești, ~917 s) to the end of the video, still driving; the whole drive trains speed
+  street_window_s: [920.0, 1078.0]
+  start: [46.93205, 28.958533]
+  destination: [46.9498, 28.931075]
+  overlay:
+    height_px: 46
+
+"2026_10_24_17_08":
+  video: data/video/raw/2026_10_24_17_08.mp4      # 7 dashcam clips joined (lossless)
+  description: Ciocana → Mircești (home), ~13.8 km through the city, dashcam (front camera), late afternoon / daylight
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # start right after the 171° U-turn out of the yard onto the street; destination where the
+  # loop into the home yard begins — the U-turn on Mircești where 2026_10_23_10_06 starts.
+  # Both times from the video's own turn detection, not GPS
+  street_window_s: [249.2, 1189.8]
+  start: [47.056617, 28.890483]
+  destination: [47.059468, 28.8113]
+  overlay:
+    height_px: 46
+
+"2026_10_26_10_02":
+  video: data/video/raw/2026_10_26_10_02.mp4      # 6 dashcam clips joined (lossless)
+  description: Home → office (Zity Mall), dashcam (front camera), morning / dry after rain
+  camera:
+    hfov_deg: 120
+    hood: 0.12
+  stride: 6
+  # same route as 2026_10_23_10_06; times from the video's own turn detection, not GPS:
+  street_window_s: [133.0, 901.0]                   # end of the U-turn on Mircești · start of the turn into the mall lot
+  start: [47.058533, 28.812217]                     # Mircești, heading south-east after the U-turn
+  destination: [47.039550, 28.802317]               # Calea Ieșilor, where the car turns into the Zity Mall lot
+  overlay:
+    height_px: 46

@@ -1,0 +1,8 @@
+26 video events · 300 candidate routes (shortest 4.92 km, ≤ 1.5×) · 11.2 min of driving
+best route: 5.25 km, cost 16.2 (runner-up 18.21); 15/26 events matched to 27 route sites
+  Calea Ieșilor → Piața Dimitrie Cantemir → Bulevardul Ștefan cel Mare și Sfânt → Mihai Viteazul → Petricani → Petricani → Mircești
+  position error at the same moment: median 925 m, within 50 m 3%
+  true junctions passed (GPS): 25
+  junctions on the chosen route: 20/25 (80%)
+  junction matching rate (right junction, ±8 s): 0/25 (0%)
+  (16 s)
